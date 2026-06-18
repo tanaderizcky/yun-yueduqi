@@ -58,11 +58,14 @@
                 <div class="stat"><span class="stat-number" id="statHistory">0</span><span class="stat-label">History</span></div>
             </div>
 
-            <!-- Currently Reading -->
-            <section class="section">
-                <div class="section-header"><h2><i class="fas fa-book-open-reader"></i> Currently Reading</h2></div>
-                <div id="currentlyReadingContainer" class="currently-reading-grid">
-                    <div class="empty-state">No reading history yet. Read a volume to see it here.</div>
+            <!-- Currently Reading – hidden if empty -->
+            <section class="section" id="currentlyReadingSection" style="display:none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-book-open-reader"></i> Currently Reading</h2>
+                    <span class="badge" id="readingBadge">Latest 7</span>
+                </div>
+                <div id="currentlyReadingContainer" class="currently-reading-horizontal">
+                    <!-- Rendered by JavaScript -->
                 </div>
             </section>
 
@@ -83,11 +86,6 @@
                             </select>
                         </div>
 
-                        <!-- Add Novel button -->
-                        <button class="btn-primary" id="showAddFormBtn">
-                            <i class="fas fa-plus"></i> Add Novel
-                        </button>
-
                         <!-- Control Grid (2x2) -->
                         <div class="control-grid">
                             <button class="btn-primary" id="refreshDriveBtn">
@@ -104,6 +102,11 @@
                             </button>
                         </div>
                         <input type="file" id="csvFileInput" accept=".csv" style="display:none;">
+
+                        <!-- Add Novel button -->
+                        <button class="btn-primary" id="showAddFormBtn">
+                            <i class="fas fa-plus"></i> Add Novel
+                        </button>
                     </div>
                 </div>
 

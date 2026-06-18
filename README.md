@@ -60,14 +60,22 @@ The app is hosted on GitHub Pages.
    ```javascript
    const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
 
-#Project Structure
+## 📁 Project Structure
 novel-website/
-├── index.html          # Home page (stats + currently reading + novel list + add/edit form)
-├── history.html        # Full reading history
-├── detail.html         # Novel detail page (all volumes, volume CRUD)
-├── style.css           # All styles (fully responsive)
-├── script.js           # All application logic (data, Drive API, rendering, cache)
-├── assets/
-│   └── covers/         # (Optional) Place default-cover.jpg here
-└── data/
-    └── novels.json     # (Example) Reference data – not used by the app (uses localStorage)
+│
+├── 📄 index.html # Home page (stats + currently reading + novel list + add/edit form)
+├── 📄 history.html # Full reading history
+├── 📄 detail.html # Novel detail page (all volumes, volume CRUD)
+│
+├── 🎨 style.css # All styles (fully responsive)
+├── ⚡ script.js # All application logic (data, Drive API, rendering, cache)
+│
+├── 📁 assets/ # Static assets
+│ └── 📁 covers/
+│ └── 🖼️ default-cover.jpg # Fallback cover image
+│
+├── 📁 data/ # (Optional) Reference data – not used by the app
+│ └── 📄 novels.json # Example data structure
+│
+├── 📄 README.md # Project documentation
+└── 📄 LICENSE # MIT License

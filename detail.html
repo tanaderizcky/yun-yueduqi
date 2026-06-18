@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Novel Library – Detail</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-wrapper">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <i class="fas fa-book-open"></i>
+                <span>Novel<span>Library</span></span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="index.html" class="nav-link"><i class="fas fa-home"></i> Home</a>
+                <a href="list.html" class="nav-link"><i class="fas fa-list"></i> Manage Novels</a>
+                <a href="history.html" class="nav-link"><i class="fas fa-clock-rotate-left"></i> History</a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="btn-drive" id="driveConnectBtn" disabled>
+                    <i class="fab fa-google-drive"></i>
+                    <span id="driveStatus">Loading...</span>
+                </button>
+                <button class="btn-refresh" id="driveRefreshBtn" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
+                    <i class="fas fa-sync-alt"></i> Reconnect Drive
+                </button>
+                <button class="btn-refresh" id="forceReimportBtn" style="margin-left:8px;">
+                    <i class="fas fa-sync-alt"></i> Re‑import All (Fresh)
+                </button>
+                <button class="btn-refresh" onclick="clearPdfCache()" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
+                    <i class="fas fa-trash"></i> Clear PDF Cache
+                </button>
+                <small class="drive-path" id="drivePathDisplay">📁 /file/pdf/j-novel/</small>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="main-header">
+                <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
+                <div class="header-actions">
+                    <span class="greeting">📖 Novel Detail</span>
+                </div>
+            </header>
+
+            <!-- Back button -->
+            <div style="margin-bottom:16px;">
+                <a href="list.html" class="btn-secondary" style="text-decoration:none; display:inline-flex; align-items:center; gap:8px; padding:8px 16px;">
+                    <i class="fas fa-arrow-left"></i> Back to List
+                </a>
+                <button class="btn-primary" id="detailEditDetailsBtn" style="margin-left:12px;">
+                    <i class="fas fa-edit"></i> Edit Details
+                </button>
+                <button class="btn-delete" id="detailDeleteNovelBtn">🗑️ Delete Novel</button>
+            </div>
+
+            <!-- Novel Info (view mode) -->
+            <div id="novelDetailContainer" style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 24px;">
+                <div style="display:flex; gap:24px; flex-wrap:wrap;">
+                    <img id="detailCover" src="" alt="Cover" style="width:150px; height:210px; object-fit:cover; border-radius:8px; background:var(--bg-card);">
+                    <div style="flex:1;">
+                        <h2 id="detailTitle" style="font-size:1.8rem; font-weight:700;">Loading...</h2>
+                        <p id="detailAuthor" style="color:var(--text-secondary); font-size:1rem;">by Unknown</p>
+                        <p id="detailDescription" style="color:var(--text-secondary); margin:8px 0;">No description</p>
+                        <span id="detailStatus" class="status-badge" style="display:inline-block; padding:4px 12px; border-radius:50px; font-size:0.8rem;">Reading</span>
+                        <span id="detailVolCount" style="margin-left:12px; color:var(--text-secondary); font-size:0.85rem;">0 volumes</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Edit Details Form -->
+            <div id="detailEditForm" style="display:none; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin-bottom:24px;">
+                <h3><i class="fas fa-edit"></i> Edit Novel Details</h3>
+                <div class="form-row" style="margin-top:12px;">
+                    <div class="form-group" style="flex:1;">
+                        <label>Title *</label>
+                        <input type="text" id="detailEditTitle" placeholder="Title">
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label>Author *</label>
+                        <input type="text" id="detailEditAuthor" placeholder="Author">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="detailEditDescription" rows="3" placeholder="Description..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group" style="flex:1;">
+                        <label>Cover URL</label>
+                        <input type="url" id="detailEditCover" placeholder="https://example.com/cover.jpg">
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label>Status</label>
+                        <select id="detailEditStatus">
+                            <option value="reading">Reading</option>
+                            <option value="completed">Completed</option>
+                            <option value="plan-to-read">Plan to Read</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button class="btn-primary" id="detailEditSaveBtn">Save Changes</button>
+                    <button class="btn-secondary" id="detailEditCancelBtn">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Volumes Section -->
+            <h3 style="margin-bottom:12px;"><i class="fas fa-layer-group"></i> All Volumes</h3>
+            <div style="margin-bottom:16px;">
+                <button class="btn-add-volume" id="detailAddVolumeBtn" style="margin:0;">
+                    <i class="fas fa-plus"></i> Add Volume
+                </button>
+            </div>
+
+            <div id="detailVolumesContainer" style="display:flex; flex-direction:column; gap:8px;">
+                <div class="empty-state">No volumes yet.</div>
+            </div>
+
+            <!-- Hidden form for adding/editing volumes -->
+            <div id="detailVolumeForm" style="display:none; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-sm); padding:16px; margin-top:12px;">
+                <h4 id="detailVolumeFormTitle">Add Volume</h4>
+                <input type="hidden" id="detailEditVolumeIndex" value="-1">
+                <div class="form-row" style="margin-top:8px;">
+                    <div class="form-group" style="flex:0 0 80px;">
+                        <label>#</label>
+                        <input type="number" id="detailVolNumber" value="1" min="1">
+                    </div>
+                    <div class="form-group" style="flex:2;">
+                        <label>Title</label>
+                        <input type="text" id="detailVolTitle" placeholder="Volume title">
+                    </div>
+                    <div class="form-group" style="flex:2;">
+                        <label>File ID / Link</label>
+                        <input type="text" id="detailVolFileId" placeholder="e.g. 1ABC123DEF456">
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button class="btn-primary" id="detailVolSaveBtn">Save Volume</button>
+                    <button class="btn-secondary" id="detailVolCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- Reader Modal -->
+    <div class="modal-overlay" id="readerModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="readerTitle">Reading</h2>
+                <button class="modal-close" id="readerClose">&times;</button>
+            </div>
+            <div class="modal-body" id="readerBody">
+                <div class="loading">Loading content...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -59,6 +59,29 @@ function formatDate(dateStr) {
 }
 
 // ============================================================
+// COVER UPLOAD
+// ============================================================
+function handleCoverUpload(file) {
+    return new Promise((resolve, reject) => {
+        if (!file) return resolve('');
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(e.target.error);
+        reader.readAsDataURL(file);
+    });
+}
+
+// ============================================================
+// UPDATE NOVEL MODIFIED DATE
+// ============================================================
+function updateNovelModifiedDate(novelId) {
+    const novel = appData.novels.find(n => n.id === novelId);
+    if (!novel) return;
+    novel.driveModifiedDate = new Date().toISOString();
+    saveData(appData);
+}
+
+// ============================================================
 // PDF CACHE (IndexedDB)
 // ============================================================
 const DB_NAME = 'NovelPdfCache';
@@ -224,10 +247,7 @@ function checkBothReady() {
             if (status) status.textContent = 'Connected ✅';
             const btn = document.getElementById('driveConnectBtn');
             if (btn) btn.style.borderColor = '#4ade80';
-            const page = window.location.pathname.split('/').pop() || 'index.html';
-            if (page === 'index.html' || page === 'list.html' || page === '') {
-                listDriveFiles();
-            }
+            listDriveFiles();
         }
     }
 }
@@ -291,13 +311,13 @@ function handleSignoutClick() {
             if (btn) btn.style.borderColor = '';
             showToast('Disconnected from Drive', 'info');
             driveFiles = [];
-            renderNovelGrid();
+            renderAll();
         });
     }
 }
 
 // ============================================================
-// DRIVE API – LIST FOLDERS AND FILES
+// DRIVE API
 // ============================================================
 async function findFolderId(folderPath) {
     const parts = folderPath.split('/').filter(p => p.length > 0);
@@ -336,15 +356,12 @@ async function listFilesInFolder(folderId) {
     const q = `'${folderId}' in parents and trashed=false`;
     const res = await gapi.client.drive.files.list({
         q,
-        fields: 'files(id, name, mimeType, modifiedTime)', // <-- MODIFIED TIME
+        fields: 'files(id, name, mimeType, modifiedTime)',
         pageSize: 100,
     });
     return res.result.files || [];
 }
 
-// ============================================================
-// DRIVE IMPORT – WITH MODIFIED TIME
-// ============================================================
 async function listDriveFiles() {
     const pathDisplay = document.getElementById('drivePathDisplay');
     if (pathDisplay) pathDisplay.textContent = '📁 Searching...';
@@ -452,7 +469,7 @@ function syncNovelsFromFolders(novelData) {
     }
     if (updated) {
         saveData(appData);
-        renderNovelGrid();
+        renderAll();
         showToast('Imported novels from Drive!', 'success');
     } else {
         showToast('No new novels to import.', 'info');
@@ -511,7 +528,7 @@ function syncNovelsFromFlat(files) {
     }
     if (updated) {
         saveData(appData);
-        renderNovelGrid();
+        renderAll();
         showToast('Imported novels from Drive!', 'success');
     }
 }
@@ -524,7 +541,7 @@ function deleteNovel(novelId) {
     appData.novels = appData.novels.filter(n => n.id !== novelId);
     appData.history = appData.history.filter(h => h.novelId !== novelId);
     saveData(appData);
-    renderNovelGrid();
+    renderAll();
     showToast('Novel deleted.', 'info');
 }
 
@@ -539,6 +556,7 @@ function editNovel(novelId) {
     document.getElementById('formStatusInput').value = novel.status || 'reading';
     document.getElementById('formTitle').innerHTML = '<i class="fas fa-edit"></i> Edit Novel';
     document.getElementById('formSubmitBtn').innerHTML = '<i class="fas fa-save"></i> Update Novel';
+    document.getElementById('formCoverFile').value = '';
     const container = document.getElementById('formVolumesContainer');
     container.innerHTML = '';
     if (novel.volumes && novel.volumes.length > 0) {
@@ -554,6 +572,9 @@ function editNovel(novelId) {
     bindFormVolumeEvents();
 }
 
+// ============================================================
+// VOLUME ENTRY WITH FILE UPLOAD
+// ============================================================
 function createVolumeEntry(num, title, fileId) {
     const div = document.createElement('div');
     div.className = 'volume-entry';
@@ -570,6 +591,10 @@ function createVolumeEntry(num, title, fileId) {
             <div class="form-group" style="flex:2;">
                 <label>File ID / Link</label>
                 <input type="text" class="form-vol-fileid" value="${escapeHtml(fileId)}" placeholder="e.g. 1ABC123DEF456">
+            </div>
+            <div class="form-group" style="flex:1;">
+                <label>Or Upload File</label>
+                <input type="file" class="form-vol-file" accept=".pdf,.txt">
             </div>
             <div class="form-group" style="flex:0 0 auto;">
                 <label>&nbsp;</label>
@@ -594,7 +619,7 @@ function bindFormVolumeEvents() {
 }
 
 // ============================================================
-// SORTING LOGIC
+// SORTING
 // ============================================================
 let currentSort = 'az';
 
@@ -618,10 +643,11 @@ function sortNovels(novels, sortType) {
 // RENDER FUNCTIONS
 // ============================================================
 
-// --- Novel Grid (list page) ---
 function renderNovelGrid() {
     const container = document.getElementById('novelGridContainer');
     if (!container) return;
+
+    renderStats();
 
     const sortedNovels = sortNovels(appData.novels, currentSort);
 
@@ -683,74 +709,19 @@ function renderNovelGrid() {
     }).join('');
 }
 
-// --- Newest Novel (grid, 7 items) ---
-function renderNewestNovel() {
-    const container = document.getElementById('newestNovelContainer');
-    if (!container) return;
-    const novels = appData.novels;
-    if (novels.length === 0) {
-        container.innerHTML = '<div class="empty-state">No novels yet. <a href="list.html">Go to Manage</a></div>';
-        container.style.display = 'block';
-        return;
-    }
-
-    // Sort by driveModifiedDate (most recent first), fallback to addedAt
-    const sorted = [...novels].sort((a, b) => {
-        const dateA = a.driveModifiedDate ? new Date(a.driveModifiedDate) : new Date(a.addedAt);
-        const dateB = b.driveModifiedDate ? new Date(b.driveModifiedDate) : new Date(b.addedAt);
-        return dateB - dateA;
-    });
-
-    const latestNovels = sorted.slice(0, 7);
-
-    container.style.display = 'grid';
-    container.style.gridTemplateColumns = 'repeat(auto-fill, minmax(180px, 1fr))';
-    container.style.gap = '12px';
-
-    container.innerHTML = latestNovels.map(n => {
-        const cover = n.cover || DEFAULT_COVER;
-        const volCount = (n.volumes || []).length;
-        let displayDate = n.driveModifiedDate ? new Date(n.driveModifiedDate) : new Date(n.addedAt);
-        const dateStr = formatDate(displayDate.toISOString());
-        const lastVol = n.volumes.length > 0 ? n.volumes[n.volumes.length - 1] : null;
-        const lastVolNum = lastVol ? lastVol.number : '?';
-
-        return `
-            <div class="volume-item" style="cursor:pointer; display:flex; flex-direction:column; padding:12px 14px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; transition:var(--transition);" onclick="window.location.href='detail.html?id=${n.id}'">
-                <img src="${cover}" alt="${escapeHtml(n.title)}" onerror="this.src='${DEFAULT_COVER}'" style="width:100%; height:120px; object-fit:contain; border-radius:4px; background:var(--bg-card); margin-bottom:8px;" />
-                <div style="font-weight:600; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(n.title)}</div>
-                <div style="font-size:0.7rem; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">by ${escapeHtml(n.author)}</div>
-                <div style="font-size:0.65rem; color:var(--text-secondary); margin-top:4px;">
-                    <span class="status-badge ${n.status}" style="font-size:0.55rem; padding:1px 6px;">${n.status || 'unknown'}</span>
-                    <span style="margin-left:6px;">${volCount} vol${volCount!==1?'s':''}</span>
-                    ${n.fromDrive ? '<span style="margin-left:6px; color:#4ade80;"><i class="fas fa-cloud" style="font-size:0.6rem;"></i></span>' : ''}
-                </div>
-                <div style="margin-top:6px; font-size:0.7rem; color:var(--accent);">Latest Vol.${lastVolNum}</div>
-                <div style="font-size:0.6rem; color:var(--text-secondary);"><i class="fas fa-calendar-plus"></i> ${dateStr}</div>
-            </div>
-        `;
-    }).join('');
-
-    if (sorted.length > 7) {
-        container.innerHTML += `
-            <div style="grid-column: 1 / -1; text-align:center; margin-top:8px; padding:12px;">
-                <a href="list.html" class="view-all" style="color:var(--accent); text-decoration:none; font-size:0.9rem;">View All ${sorted.length} Novels →</a>
-            </div>
-        `;
-    }
-}
-
-// --- Currently Reading ---
 function renderCurrentlyReading() {
     const container = document.getElementById('currentlyReadingContainer');
     if (!container) return;
-    const reading = appData.novels.filter(n => n.status === 'reading');
+    const reading = appData.novels.filter(n => {
+        if (n.status !== 'reading') return false;
+        const lastInfo = getLastReadInfo(n.id);
+        return lastInfo !== null;
+    });
     if (reading.length === 0) {
-        container.innerHTML = '<div class="empty-state">You\'re not reading anything right now.</div>';
+        container.innerHTML = '<div class="empty-state">No reading history yet. Read a volume to see it here.</div>';
         return;
     }
 
-    // Sort by last read date (most recent first)
     const sorted = reading.sort((a, b) => {
         const lastA = getLastReadInfo(a.id);
         const lastB = getLastReadInfo(b.id);
@@ -781,52 +752,6 @@ function renderCurrentlyReading() {
     }).join('');
 }
 
-// --- Recent Volumes ---
-function renderRecentVolumesFromData() {
-    const container = document.getElementById('recentVolumesContainer');
-    if (!container) return;
-    const allVolumes = [];
-    appData.novels.forEach(novel => {
-        (novel.volumes || []).forEach((vol, idx) => {
-            allVolumes.push({
-                novelTitle: novel.title,
-                novelId: novel.id,
-                volume: vol,
-                volumeIndex: idx,
-                sortDate: vol.modifiedTime ? new Date(vol.modifiedTime) : new Date(novel.addedAt)
-            });
-        });
-    });
-    allVolumes.sort((a, b) => b.sortDate - a.sortDate);
-    const recent = allVolumes.slice(0, 5);
-    if (recent.length === 0) {
-        container.innerHTML = '<div class="empty-state">No volumes yet. <a href="list.html">Add some</a></div>';
-        return;
-    }
-    container.innerHTML = recent.map(item => {
-        const v = item.volume;
-        const hasFile = v.fileId && v.fileId.length > 0;
-        const readBtn = hasFile
-            ? `<div class="vol-actions"><button onclick="openReader('${item.novelId}', ${item.volumeIndex})">📖 Read</button></div>`
-            : '';
-        return `
-            <div class="volume-item">
-                <div class="vol-num">Vol. ${v.number || '?'}</div>
-                <span class="vol-title">${escapeHtml(v.title || 'Untitled')}</span>
-                <span class="vol-fileid">${escapeHtml(v.fileId || '')}</span>
-                <small style="color:var(--text-secondary);display:block;margin-top:4px;">${escapeHtml(item.novelTitle)}</small>
-                ${readBtn}
-            </div>
-        `;
-    }).join('');
-}
-
-// --- History Preview (home page) - removed, but keep for history.html ---
-function renderHistoryPreview() {
-    // Not used on home page anymore, but kept for backward compatibility
-}
-
-// --- Full History ---
 function renderFullHistory() {
     const container = document.getElementById('fullHistoryContainer');
     if (!container) return;
@@ -843,8 +768,11 @@ function renderFullHistory() {
         const title = novel ? novel.title : 'Unknown novel';
         const volNum = h.volumeIndex !== undefined ? h.volumeIndex + 1 : '?';
         const date = h.date ? new Date(h.date).toLocaleString() : '';
+        const hasFile = novel && novel.volumes[h.volumeIndex] && novel.volumes[h.volumeIndex].fileId;
+        const clickable = hasFile ? `onclick="openReader('${h.novelId}', ${h.volumeIndex})"` : '';
+        const cursor = hasFile ? 'cursor:pointer;' : 'cursor:default;';
         return `
-            <div class="history-item">
+            <div class="history-item" style="${cursor} transition:var(--transition);" ${clickable}>
                 <div class="left">
                     <span class="novel-title">${escapeHtml(title)}</span>
                     <span class="volume-label">Vol. ${volNum}</span>
@@ -853,6 +781,31 @@ function renderFullHistory() {
             </div>
         `;
     }).join('');
+}
+
+function renderStats() {
+    const novels = appData.novels;
+    const total = novels.length;
+    let volumes = 0, reading = 0;
+    novels.forEach(n => {
+        volumes += (n.volumes || []).length;
+        if (n.status === 'reading') reading++;
+    });
+    const historyCount = appData.history.length;
+    const elNov = document.getElementById('statNovels');
+    const elVol = document.getElementById('statVolumes');
+    const elRead = document.getElementById('statReading');
+    const elHist = document.getElementById('statHistory');
+    if (elNov) elNov.textContent = total;
+    if (elVol) elVol.textContent = volumes;
+    if (elRead) elRead.textContent = reading;
+    if (elHist) elHist.textContent = historyCount;
+}
+
+function renderAll() {
+    renderStats();
+    renderCurrentlyReading();
+    renderNovelGrid();
 }
 
 // ============================================================
@@ -874,7 +827,7 @@ function getVolumeNumber(novel, volumeIndex) {
 }
 
 // ============================================================
-// READER – WITH CACHE
+// READER
 // ============================================================
 let currentNovelId = null;
 let currentVolumeIndex = null;
@@ -887,7 +840,6 @@ window.openReader = function(novelId, volIndex) {
     const fileId = extractFileId(vol.fileId);
     if (!fileId) return showToast('Invalid file ID', 'error');
 
-    // Record read
     recordRead(novelId, volIndex);
 
     currentNovelId = novelId;
@@ -901,17 +853,14 @@ window.openReader = function(novelId, volIndex) {
 };
 
 function recordRead(novelId, volumeIndex) {
-    const existing = appData.history.find(h => h.novelId === novelId && h.volumeIndex === volumeIndex);
-    if (existing) {
-        existing.date = new Date().toISOString();
-    } else {
-        appData.history.push({
-            novelId: novelId,
-            volumeIndex: volumeIndex,
-            date: new Date().toISOString()
-        });
-    }
+    appData.history = appData.history.filter(h => h.novelId !== novelId);
+    appData.history.push({
+        novelId: novelId,
+        volumeIndex: volumeIndex,
+        date: new Date().toISOString()
+    });
     saveData(appData);
+    updateNovelModifiedDate(novelId);
 }
 
 document.getElementById('readerClose')?.addEventListener('click', function() {
@@ -936,7 +885,14 @@ async function fetchFileContent(fileId) {
             return;
         }
 
-        // 2. Fetch from Drive
+        // 2. If it's a local file (starts with "local_") but not in cache (shouldn't happen), show error
+        if (fileId.startsWith('local_')) {
+            document.getElementById('readerBody').innerHTML = '<div class="loading" style="color:#f87171;">Local file not found in cache.</div>';
+            showToast('Local file missing. Please re-upload.', 'error');
+            return;
+        }
+
+        // 3. Otherwise, try Drive
         const token = gapi.client.getToken();
         if (!token) {
             showToast('Not authenticated. Please reconnect Drive.', 'error');
@@ -1047,33 +1003,56 @@ async function renderPdf(arrayBuffer) {
 }
 
 // ============================================================
-// HOME PAGE RENDERING
+// IMPORT FROM LINK (NEW)
 // ============================================================
-function renderAll() {
-    renderStats();
-    renderNewestNovel();
-    renderCurrentlyReading();
-    renderRecentVolumesFromData();
-    // renderHistoryPreview(); // Removed from home
-}
+async function importFromLink() {
+    const url = prompt('Enter the direct download URL (PDF or TXT):');
+    if (!url) return;
+    try {
+        showToast('Downloading file...', 'info');
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const contentType = response.headers.get('content-type') || '';
+        const isPdf = contentType.includes('pdf') || url.endsWith('.pdf');
+        const isText = contentType.includes('text') || url.endsWith('.txt');
+        if (!isPdf && !isText) {
+            showToast('Unsupported file type. Only PDF and TXT are supported.', 'error');
+            return;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const fileName = url.split('/').pop() || 'novel';
+        const fileId = 'link_' + Date.now() + '_' + fileName;
+        await savePdfToCache(fileId, arrayBuffer);
 
-function renderStats() {
-    const novels = appData.novels;
-    const total = novels.length;
-    let volumes = 0, reading = 0;
-    novels.forEach(n => {
-        volumes += (n.volumes || []).length;
-        if (n.status === 'reading') reading++;
-    });
-    const historyCount = appData.history.length;
-    const elNov = document.getElementById('statNovels');
-    const elVol = document.getElementById('statVolumes');
-    const elRead = document.getElementById('statReading');
-    const elHist = document.getElementById('statHistory');
-    if (elNov) elNov.textContent = total;
-    if (elVol) elVol.textContent = volumes;
-    if (elRead) elRead.textContent = reading;
-    if (elHist) elHist.textContent = historyCount;
+        // Create a novel with one volume
+        const title = prompt('Enter novel title:', fileName.replace(/\.[^.]+$/, ''));
+        if (!title) return;
+        const author = prompt('Enter author name:', 'Unknown');
+        const novel = {
+            id: generateId(),
+            title,
+            author: author || 'Unknown',
+            description: `Imported from link: ${url}`,
+            cover: DEFAULT_COVER,
+            status: 'reading',
+            volumes: [{ number: 1, title: fileName, fileId }],
+            fromDrive: false,
+            addedAt: new Date().toISOString(),
+            driveModifiedDate: new Date().toISOString()
+        };
+        appData.novels.push(novel);
+        appData.history.push({
+            novelId: novel.id,
+            volumeIndex: 0,
+            date: new Date().toISOString()
+        });
+        saveData(appData);
+        renderAll();
+        showToast(`Imported "${title}" from link.`, 'success');
+    } catch (err) {
+        console.error('Import from link error:', err);
+        showToast('Failed to import from link: ' + err.message, 'error');
+    }
 }
 
 // ============================================================
@@ -1086,7 +1065,7 @@ function loadDetailPage() {
     const id = params.get('id');
     if (!id) {
         showToast('No novel specified', 'error');
-        window.location.href = 'list.html';
+        window.location.href = 'index.html';
         return;
     }
     detailNovelId = id;
@@ -1097,7 +1076,7 @@ function renderNovelDetail(novelId) {
     const novel = appData.novels.find(n => n.id === novelId);
     if (!novel) {
         showToast('Novel not found', 'error');
-        window.location.href = 'list.html';
+        window.location.href = 'index.html';
         return;
     }
 
@@ -1115,6 +1094,7 @@ function renderNovelDetail(novelId) {
     document.getElementById('detailEditDescription').value = novel.description || '';
     document.getElementById('detailEditCover').value = novel.cover || '';
     document.getElementById('detailEditStatus').value = novel.status || 'reading';
+    document.getElementById('detailCoverFile').value = '';
 
     renderDetailVolumes(novel);
 }
@@ -1154,7 +1134,6 @@ function renderDetailVolumes(novel) {
     }).join('');
 }
 
-// ----- Volume CRUD on detail page -----
 function editVolume(index) {
     const novel = appData.novels.find(n => n.id === detailNovelId);
     if (!novel) return showToast('Novel not found', 'error');
@@ -1176,6 +1155,7 @@ function deleteVolume(index) {
     const novel = appData.novels.find(n => n.id === detailNovelId);
     if (!novel) return showToast('Novel not found', 'error');
     novel.volumes.splice(index, 1);
+    updateNovelModifiedDate(detailNovelId);
     appData.history = appData.history.filter(h => !(h.novelId === detailNovelId && h.volumeIndex === index));
     appData.history.forEach(h => {
         if (h.novelId === detailNovelId && h.volumeIndex > index) {
@@ -1189,7 +1169,7 @@ function deleteVolume(index) {
 }
 
 function editNovelFromDetail() {
-    window.location.href = 'list.html?edit=' + detailNovelId;
+    window.location.href = 'index.html?edit=' + detailNovelId;
 }
 
 function deleteNovelFromDetail() {
@@ -1198,11 +1178,11 @@ function deleteNovelFromDetail() {
     appData.history = appData.history.filter(h => h.novelId !== detailNovelId);
     saveData(appData);
     showToast('Novel deleted', 'info');
-    window.location.href = 'list.html';
+    window.location.href = 'index.html';
 }
 
 // ============================================================
-// FORM HANDLING (list page)
+// FORM HANDLING (for index.html)
 // ============================================================
 function resetForm() {
     document.getElementById('editNovelId').value = '';
@@ -1210,6 +1190,7 @@ function resetForm() {
     document.getElementById('formAuthorInput').value = '';
     document.getElementById('formDescriptionInput').value = '';
     document.getElementById('formCoverInput').value = '';
+    document.getElementById('formCoverFile').value = '';
     document.getElementById('formStatusInput').value = 'reading';
     document.getElementById('formTitle').innerHTML = '<i class="fas fa-plus-circle"></i> Add New Novel';
     document.getElementById('formSubmitBtn').innerHTML = '<i class="fas fa-save"></i> Save Novel';
@@ -1221,30 +1202,61 @@ function resetForm() {
 }
 
 // ============================================================
+// CSV IMPORT
+// ============================================================
+function parseCSV(text) {
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    return lines.map(line => {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                result.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        result.push(current.trim());
+        return result;
+    });
+}
+
+// ============================================================
 // PAGE INIT
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     const page = window.location.pathname.split('/').pop() || 'index.html';
 
-    // ----- LIST PAGE -----
-    if (page === 'list.html' || page === '') {
-        renderNovelGrid();
+    // ----- HOME PAGE -----
+    if (page === 'index.html' || page === '') {
+        renderAll();
 
+        if (appData.novels.length === 0) {
+            setTimeout(() => showToast('👋 Welcome! Add a novel or import from Drive.', 'info'), 800);
+        }
+
+        // Sort dropdown
         document.getElementById('sortSelect')?.addEventListener('change', function() {
             currentSort = this.value;
             renderNovelGrid();
         });
 
-        document.getElementById('showAddFormBtn').addEventListener('click', function() {
+        // Show add form
+        document.getElementById('showAddFormBtn')?.addEventListener('click', function() {
             resetForm();
             document.getElementById('novelFormContainer').style.display = 'block';
             document.getElementById('novelFormContainer').scrollIntoView({ behavior: 'smooth' });
         });
 
-        document.getElementById('closeFormBtn').addEventListener('click', resetForm);
-        document.getElementById('formCancelBtn').addEventListener('click', resetForm);
+        document.getElementById('closeFormBtn')?.addEventListener('click', resetForm);
+        document.getElementById('formCancelBtn')?.addEventListener('click', resetForm);
 
-        document.getElementById('formAddVolumeBtn').addEventListener('click', function() {
+        document.getElementById('formAddVolumeBtn')?.addEventListener('click', function() {
             const container = document.getElementById('formVolumesContainer');
             const entries = container.querySelectorAll('.volume-entry');
             const num = entries.length + 1;
@@ -1253,73 +1265,203 @@ document.addEventListener('DOMContentLoaded', function() {
             bindFormVolumeEvents();
         });
 
-        document.getElementById('novelForm').addEventListener('submit', function(e) {
+        document.getElementById('novelForm')?.addEventListener('submit', async function(e) {
             e.preventDefault();
             const editId = document.getElementById('editNovelId').value;
             const title = document.getElementById('formTitleInput').value.trim();
             const author = document.getElementById('formAuthorInput').value.trim();
             if (!title || !author) return showToast('Title and author required', 'error');
 
+            // Gather volumes with possible file uploads
+            const volumeEntries = document.querySelectorAll('#formVolumesContainer .volume-entry');
             const volumes = [];
-            document.querySelectorAll('#formVolumesContainer .volume-entry').forEach(entry => {
+            const filesToUpload = [];
+
+            volumeEntries.forEach((entry, index) => {
                 const num = parseInt(entry.querySelector('.form-vol-number').value);
                 const t = entry.querySelector('.form-vol-title').value.trim() || `Volume ${num}`;
                 let fid = entry.querySelector('.form-vol-fileid').value.trim();
                 fid = extractFileId(fid) || fid;
+                const fileInput = entry.querySelector('.form-vol-file');
                 if (!isNaN(num) && num > 0) {
-                    volumes.push({ number: num, title: t, fileId: fid });
+                    volumes.push({ number: num, title: t, fileId: fid, index });
+                }
+                if (fileInput && fileInput.files && fileInput.files[0]) {
+                    filesToUpload.push({ index, file: fileInput.files[0] });
                 }
             });
-            if (!volumes.length) return showToast('Add at least one volume', 'error');
+
+            if (volumes.length === 0) return showToast('Add at least one volume', 'error');
+
+            let coverData = document.getElementById('formCoverInput').value.trim() || DEFAULT_COVER;
+            const coverFile = document.getElementById('formCoverFile').files[0];
+            if (coverFile) {
+                try {
+                    coverData = await handleCoverUpload(coverFile);
+                } catch (err) {
+                    showToast('Error reading cover file: ' + err.message, 'error');
+                    return;
+                }
+            }
 
             const novelData = {
                 title,
                 author,
                 description: document.getElementById('formDescriptionInput').value.trim(),
-                cover: document.getElementById('formCoverInput').value.trim() || DEFAULT_COVER,
+                cover: coverData,
                 status: document.getElementById('formStatusInput').value,
                 volumes: volumes,
                 fromDrive: false,
                 addedAt: new Date().toISOString(),
+                driveModifiedDate: new Date().toISOString(),
             };
 
+            let novel;
             if (editId) {
                 const idx = appData.novels.findIndex(n => n.id === editId);
                 if (idx === -1) return showToast('Novel not found', 'error');
-                appData.novels[idx] = { ...appData.novels[idx], ...novelData };
-                appData.novels[idx].id = editId;
+                novel = appData.novels[idx];
+                Object.assign(novel, novelData);
+                novel.id = editId;
+                novel.driveModifiedDate = new Date().toISOString();
                 showToast(`Updated "${title}"`, 'success');
             } else {
-                const novel = { id: generateId(), ...novelData };
+                novel = { id: generateId(), ...novelData };
                 appData.novels.push(novel);
-                volumes.forEach((v, idx) => {
+                if (volumes.length > 0) {
                     appData.history.push({
                         novelId: novel.id,
-                        volumeIndex: idx,
+                        volumeIndex: 0,
                         date: new Date().toISOString()
                     });
-                });
+                }
                 showToast(`Added "${title}"`, 'success');
             }
+
+            // Process file uploads
+            if (filesToUpload.length > 0) {
+                for (const f of filesToUpload) {
+                    const file = f.file;
+                    const localId = 'local_' + Date.now() + '_' + file.name;
+                    const arrayBuffer = await file.arrayBuffer();
+                    await savePdfToCache(localId, arrayBuffer);
+                    const volNum = volumes[f.index]?.number;
+                    if (volNum) {
+                        const vol = novel.volumes.find(v => v.number === volNum);
+                        if (vol) vol.fileId = localId;
+                    }
+                }
+                saveData(appData);
+            }
+
             saveData(appData);
-            renderNovelGrid();
+            renderAll();
             resetForm();
         });
 
-        // 🔥 Re-import All (Fresh) button
+        // Import from Drive
+        document.getElementById('refreshDriveBtn')?.addEventListener('click', function() {
+            if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
+                listDriveFiles();
+            } else {
+                showToast('Connect Drive first', 'error');
+            }
+        });
+
+        // Import CSV
+        document.getElementById('importCsvBtn')?.addEventListener('click', function() {
+            document.getElementById('csvFileInput').click();
+        });
+
+        document.getElementById('csvFileInput')?.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const text = event.target.result;
+                const rows = parseCSV(text);
+                if (rows.length < 2) {
+                    showToast('CSV must have at least one data row.', 'error');
+                    return;
+                }
+                const headers = rows[0];
+                const dataRows = rows.slice(1);
+                const titleIdx = headers.indexOf('title');
+                const authorIdx = headers.indexOf('author');
+                const descIdx = headers.indexOf('description');
+                const coverIdx = headers.indexOf('cover_url');
+                const statusIdx = headers.indexOf('status');
+                const volumesIdx = headers.indexOf('volumes');
+                if (titleIdx === -1 || authorIdx === -1) {
+                    showToast('CSV must have "title" and "author" columns.', 'error');
+                    return;
+                }
+                let added = 0;
+                dataRows.forEach(row => {
+                    if (row.length <= Math.max(titleIdx, authorIdx, descIdx, coverIdx, statusIdx, volumesIdx)) return;
+                    const title = row[titleIdx]?.trim();
+                    const author = row[authorIdx]?.trim();
+                    if (!title || !author) return;
+                    const description = row[descIdx]?.trim() || '';
+                    const cover = row[coverIdx]?.trim() || DEFAULT_COVER;
+                    const status = row[statusIdx]?.trim() || 'reading';
+                    let volumes = [];
+                    if (volumesIdx !== -1 && row[volumesIdx]) {
+                        try {
+                            volumes = JSON.parse(row[volumesIdx]);
+                        } catch (e) {
+                            console.warn('Invalid volumes JSON for', title);
+                        }
+                    }
+                    if (!Array.isArray(volumes)) volumes = [];
+                    const novel = {
+                        id: generateId(),
+                        title,
+                        author,
+                        description,
+                        cover,
+                        status,
+                        volumes: volumes.map((v, idx) => ({
+                            number: v.number || idx + 1,
+                            title: v.title || `Volume ${idx+1}`,
+                            fileId: v.fileId || ''
+                        })),
+                        fromDrive: false,
+                        addedAt: new Date().toISOString(),
+                        driveModifiedDate: new Date().toISOString()
+                    };
+                    appData.novels.push(novel);
+                    if (novel.volumes.length > 0) {
+                        appData.history.push({
+                            novelId: novel.id,
+                            volumeIndex: 0,
+                            date: new Date().toISOString()
+                        });
+                    }
+                    added++;
+                });
+                saveData(appData);
+                renderAll();
+                showToast(`Imported ${added} novels from CSV.`, 'success');
+                document.getElementById('csvFileInput').value = '';
+            };
+            reader.readAsText(file);
+        });
+
+        // Import from Link
+        document.getElementById('importLinkBtn')?.addEventListener('click', importFromLink);
+
+        // Re-import All
         document.getElementById('forceReimportBtn')?.addEventListener('click', function() {
             console.log('🔄 Re-import button clicked');
             if (!confirm('This will delete all Drive-imported novels and re-import from scratch. Continue?')) return;
-            // Remove all Drive-imported novels
             const originalCount = appData.novels.length;
             appData.novels = appData.novels.filter(n => !n.fromDrive);
-            // Also clean history for those novels
             const driveNovelIds = appData.novels.filter(n => n.fromDrive).map(n => n.id);
             appData.history = appData.history.filter(h => !driveNovelIds.includes(h.novelId));
             saveData(appData);
             console.log(`🗑️ Deleted ${originalCount - appData.novels.length} Drive novels`);
-            renderNovelGrid();
-            // Now re-list Drive files
+            renderAll();
             if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
                 console.log('📂 Re-listing Drive files...');
                 listDriveFiles();
@@ -1327,13 +1469,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 showToast('Connect Drive first', 'error');
             }
         });
-    }
 
-    // ----- HOME PAGE -----
-    if (page === 'index.html' || page === '') {
-        renderAll();
-        if (appData.novels.length === 0) {
-            setTimeout(() => showToast('👋 Welcome! Go to "Manage Novels" to add or import.', 'info'), 800);
+        const params = new URLSearchParams(window.location.search);
+        const editId = params.get('edit');
+        if (editId) {
+            const novel = appData.novels.find(n => n.id === editId);
+            if (novel) {
+                setTimeout(() => {
+                    editNovel(editId);
+                }, 300);
+            }
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, newUrl);
         }
     }
 
@@ -1361,11 +1508,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('detailEditDescription').value = novel.description || '';
                     document.getElementById('detailEditCover').value = novel.cover || '';
                     document.getElementById('detailEditStatus').value = novel.status || 'reading';
+                    document.getElementById('detailCoverFile').value = '';
                 }
             }
         });
 
-        document.getElementById('detailEditSaveBtn')?.addEventListener('click', function() {
+        document.getElementById('detailEditSaveBtn')?.addEventListener('click', async function() {
             const novel = appData.novels.find(n => n.id === detailNovelId);
             if (!novel) return showToast('Novel not found', 'error');
 
@@ -1373,11 +1521,23 @@ document.addEventListener('DOMContentLoaded', function() {
             const author = document.getElementById('detailEditAuthor').value.trim();
             if (!title || !author) return showToast('Title and author required', 'error');
 
+            let coverData = document.getElementById('detailEditCover').value.trim() || DEFAULT_COVER;
+            const coverFile = document.getElementById('detailCoverFile').files[0];
+            if (coverFile) {
+                try {
+                    coverData = await handleCoverUpload(coverFile);
+                } catch (err) {
+                    showToast('Error reading cover file: ' + err.message, 'error');
+                    return;
+                }
+            }
+
             novel.title = title;
             novel.author = author;
             novel.description = document.getElementById('detailEditDescription').value.trim();
-            novel.cover = document.getElementById('detailEditCover').value.trim() || DEFAULT_COVER;
+            novel.cover = coverData;
             novel.status = document.getElementById('detailEditStatus').value;
+            novel.driveModifiedDate = new Date().toISOString();
 
             saveData(appData);
             renderNovelDetail(detailNovelId);
@@ -1396,6 +1556,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('detailEditDescription').value = novel.description || '';
                 document.getElementById('detailEditCover').value = novel.cover || '';
                 document.getElementById('detailEditStatus').value = novel.status || 'reading';
+                document.getElementById('detailCoverFile').value = '';
             }
         });
 
@@ -1437,14 +1598,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 showToast('Volume updated', 'success');
             } else {
                 novel.volumes.push(newVolume);
-                appData.history.push({
-                    novelId: novel.id,
-                    volumeIndex: novel.volumes.length - 1,
-                    date: new Date().toISOString()
-                });
                 showToast('Volume added', 'success');
             }
-
+            novel.driveModifiedDate = new Date().toISOString();
+            if (novel.volumes.length === 1 && !appData.history.some(h => h.novelId === detailNovelId)) {
+                appData.history.push({
+                    novelId: detailNovelId,
+                    volumeIndex: 0,
+                    date: new Date().toISOString()
+                });
+            }
             saveData(appData);
             renderDetailVolumes(novel);
             document.getElementById('detailVolCount').textContent = (novel.volumes || []).length + ' volumes';
@@ -1465,14 +1628,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.getElementById('driveRefreshBtn')?.addEventListener('click', refreshDriveConnection);
 
-    document.getElementById('refreshDriveBtn')?.addEventListener('click', function() {
-        if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
-            listDriveFiles();
-        } else {
-            showToast('Connect Drive first', 'error');
-        }
-    });
-
     document.getElementById('menuToggle')?.addEventListener('click', function() {
         const sidebar = document.getElementById('sidebar');
         if (sidebar) sidebar.classList.toggle('open');
@@ -1484,27 +1639,13 @@ document.addEventListener('DOMContentLoaded', function() {
         items.forEach(item => {
             const title = item.querySelector('h4')?.textContent?.toLowerCase() || '';
             const author = item.querySelector('.author')?.textContent?.toLowerCase() || '';
-            item.style.display = (title.includes(q) || author.includes(q)) ? '' : 'none';
+            const match = title.includes(q) || author.includes(q);
+            item.style.display = match ? '' : 'none';
         });
         const visible = Array.from(items).filter(el => el.style.display !== 'none');
         const countEl = document.getElementById('novelCount');
         if (countEl) countEl.textContent = visible.length + ' novels';
     });
-
-    if (page === 'list.html' || page === '') {
-        const params = new URLSearchParams(window.location.search);
-        const editId = params.get('edit');
-        if (editId) {
-            const novel = appData.novels.find(n => n.id === editId);
-            if (novel) {
-                setTimeout(() => {
-                    editNovel(editId);
-                }, 300);
-            }
-            const newUrl = window.location.pathname;
-            window.history.replaceState({}, document.title, newUrl);
-        }
-    }
 
     loadGoogleApis();
 });

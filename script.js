@@ -710,18 +710,18 @@ function renderNovelGrid() {
 }
 
 function renderCurrentlyReading() {
+    const section = document.getElementById('currentlyReadingSection');
     const container = document.getElementById('currentlyReadingContainer');
-    if (!container) return;
+    if (!section || !container) return;
+
+    // Get novels with status 'reading' AND have history
     const reading = appData.novels.filter(n => {
         if (n.status !== 'reading') return false;
         const lastInfo = getLastReadInfo(n.id);
         return lastInfo !== null;
     });
-    if (reading.length === 0) {
-        container.innerHTML = '<div class="empty-state">No reading history yet. Read a volume to see it here.</div>';
-        return;
-    }
 
+    // Sort by last read date (most recent first)
     const sorted = reading.sort((a, b) => {
         const lastA = getLastReadInfo(a.id);
         const lastB = getLastReadInfo(b.id);
@@ -730,23 +730,36 @@ function renderCurrentlyReading() {
         return dateB - dateA;
     });
 
-    container.innerHTML = sorted.map(n => {
+    // Take only the 7 most recent
+    const latest7 = sorted.slice(0, 7);
+
+    if (latest7.length === 0) {
+        // Hide the entire section
+        section.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    // Show the section
+    section.style.display = 'block';
+    const badge = document.getElementById('readingBadge');
+    if (badge) badge.textContent = `Latest ${latest7.length}`;
+
+    container.innerHTML = latest7.map(n => {
         const cover = n.cover || DEFAULT_COVER;
         const volCount = (n.volumes || []).length;
         const lastInfo = getLastReadInfo(n.id);
         const lastVolNum = lastInfo ? getVolumeNumber(n, lastInfo.volumeIndex) : null;
         const lastDate = lastInfo ? formatDate(lastInfo.date) : 'Not read yet';
-        const latestInfo = lastVolNum ? `Vol.${lastVolNum} – ${lastDate}` : `Not read yet`;
+        const latestInfo = lastVolNum ? `Vol.${lastVolNum}` : '—';
 
         return `
-            <div class="reading-card" style="cursor:pointer;" onclick="window.location.href='detail.html?id=${n.id}'">
+            <div class="reading-card" onclick="window.location.href='detail.html?id=${n.id}'">
                 <img src="${cover}" alt="${escapeHtml(n.title)}" onerror="this.src='${DEFAULT_COVER}'" />
-                <h4>${escapeHtml(n.title)}</h4>
-                <div class="author">${escapeHtml(n.author)}</div>
+                <h4 title="${escapeHtml(n.title)}">${escapeHtml(n.title)}</h4>
+                <div class="author" title="${escapeHtml(n.author)}">${escapeHtml(n.author)}</div>
                 <div class="volume-count">${volCount} volume${volCount!==1?'s':''}</div>
-                <div style="margin-top:6px; font-size:0.75rem; color:var(--text-secondary);">
-                    <i class="fas fa-bookmark"></i> Latest: ${latestInfo}
-                </div>
+                <div class="read-date"><i class="fas fa-clock"></i> ${lastInfo ? lastDate : 'Not read'}</div>
             </div>
         `;
     }).join('');

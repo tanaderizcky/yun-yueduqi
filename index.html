@@ -37,6 +37,9 @@
             </div>
         </aside>
 
+        <!-- Backdrop for mobile -->
+        <div id="sidebarBackdrop" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:99;" onclick="closeSidebar()"></div>
+
         <!-- Main Content -->
         <main class="main-content">
             <header class="main-header">
@@ -44,6 +47,9 @@
                 <div class="header-search">
                     <i class="fas fa-search"></i>
                     <input type="text" id="searchInput" placeholder="Search novels...">
+                </div>
+                <div class="header-actions">
+                    <span class="greeting">👋 Welcome</span>
                 </div>
             </header>
 
@@ -73,7 +79,6 @@
 
                 <!-- Controls Row -->
                 <div class="controls-row">
-                    <!-- Sort dropdown -->
                     <div class="sort-wrapper">
                         <label>Sort:</label>
                         <select id="sortSelect">
@@ -86,7 +91,6 @@
 
                     <button class="btn-primary" id="showAddFormBtn"><i class="fas fa-plus"></i> Add Novel</button>
 
-                    <!-- 2x2 Control Grid -->
                     <div class="control-grid">
                         <button class="btn-primary" id="refreshDriveBtn"><i class="fas fa-cloud-upload-alt"></i> Import Drive</button>
                         <button class="btn-primary" id="importCsvBtn"><i class="fas fa-file-import"></i> Import CSV</button>

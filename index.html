@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
     <title>Novel Library</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -45,9 +45,6 @@
                     <i class="fas fa-search"></i>
                     <input type="text" id="searchInput" placeholder="Search novels...">
                 </div>
-                <div class="header-actions">
-                    <span class="greeting">👋 Welcome</span>
-                </div>
             </header>
 
             <!-- Stats -->
@@ -64,9 +61,7 @@
                     <h2><i class="fas fa-book-open-reader"></i> Currently Reading</h2>
                     <span class="badge" id="readingBadge">Latest 7</span>
                 </div>
-                <div id="currentlyReadingContainer" class="currently-reading-horizontal">
-                    <!-- Rendered by JavaScript -->
-                </div>
+                <div id="currentlyReadingContainer" class="currently-reading-horizontal"></div>
             </section>
 
             <!-- All Novels (A-Z) -->
@@ -74,40 +69,31 @@
                 <div class="section-header">
                     <h2><i class="fas fa-list"></i> All Novels</h2>
                     <span class="badge" id="novelCount">0 novels</span>
-                    <div class="header-controls">
-                        <!-- Sort dropdown -->
-                        <div class="sort-wrapper">
-                            <label style="color:var(--text-secondary); font-size:0.85rem;">Sort:</label>
-                            <select id="sortSelect" style="background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:0.85rem;">
-                                <option value="az">A → Z</option>
-                                <option value="za">Z → A</option>
-                                <option value="newest">Newest</option>
-                                <option value="oldest">Oldest</option>
-                            </select>
-                        </div>
+                </div>
 
-                         <!-- Add Novel button -->
-                        <button class="btn-primary" id="showAddFormBtn">
-                            <i class="fas fa-plus"></i> Add Novel
-                        </button>
-
-                        <!-- Control Grid (2x2) -->
-                        <div class="control-grid">
-                            <button class="btn-primary" id="refreshDriveBtn">
-                                <i class="fas fa-cloud-upload-alt"></i> Import Drive
-                            </button>
-                            <button class="btn-primary" id="importCsvBtn">
-                                <i class="fas fa-file-import"></i> Import CSV
-                            </button>
-                            <button class="btn-refresh" id="importLinkBtn">
-                                <i class="fas fa-link"></i> Import Link
-                            </button>
-                            <button class="btn-refresh" id="forceReimportBtn">
-                                <i class="fas fa-sync-alt"></i> Re‑import All
-                            </button>
-                        </div>
-                        <input type="file" id="csvFileInput" accept=".csv" style="display:none;">
+                <!-- Controls Row -->
+                <div class="controls-row">
+                    <!-- Sort dropdown -->
+                    <div class="sort-wrapper">
+                        <label>Sort:</label>
+                        <select id="sortSelect">
+                            <option value="az">A → Z</option>
+                            <option value="za">Z → A</option>
+                            <option value="newest">Newest</option>
+                            <option value="oldest">Oldest</option>
+                        </select>
                     </div>
+
+                    <button class="btn-primary" id="showAddFormBtn"><i class="fas fa-plus"></i> Add Novel</button>
+
+                    <!-- 2x2 Control Grid -->
+                    <div class="control-grid">
+                        <button class="btn-primary" id="refreshDriveBtn"><i class="fas fa-cloud-upload-alt"></i> Import Drive</button>
+                        <button class="btn-primary" id="importCsvBtn"><i class="fas fa-file-import"></i> Import CSV</button>
+                        <button class="btn-refresh" id="importLinkBtn"><i class="fas fa-link"></i> Import Link</button>
+                        <button class="btn-refresh" id="forceReimportBtn"><i class="fas fa-sync-alt"></i> Re‑import All</button>
+                    </div>
+                    <input type="file" id="csvFileInput" accept=".csv" style="display:none;">
                 </div>
 
                 <!-- Add/Edit Form -->
@@ -119,62 +105,28 @@
                     <form id="novelForm" class="add-form" style="padding:0; background:transparent; border:none;">
                         <input type="hidden" id="editNovelId" value="">
                         <div class="form-row">
-                            <div class="form-group" style="flex:1;">
-                                <label>Title *</label>
-                                <input type="text" id="formTitleInput" placeholder="e.g. The Silent Kingdom" required>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Author *</label>
-                                <input type="text" id="formAuthorInput" placeholder="e.g. Jane Doe" required>
-                            </div>
+                            <div class="form-group"><label>Title *</label><input type="text" id="formTitleInput" placeholder="e.g. The Silent Kingdom" required></div>
+                            <div class="form-group"><label>Author *</label><input type="text" id="formAuthorInput" placeholder="e.g. Jane Doe" required></div>
                         </div>
-                        <div class="form-group">
-                            <label>Description</label>
-                            <textarea id="formDescriptionInput" rows="2" placeholder="A brief synopsis..."></textarea>
-                        </div>
+                        <div class="form-group"><label>Description</label><textarea id="formDescriptionInput" rows="2" placeholder="A brief synopsis..."></textarea></div>
                         <div class="form-row">
-                            <div class="form-group" style="flex:1;">
-                                <label>Cover URL</label>
-                                <input type="url" id="formCoverInput" placeholder="https://example.com/cover.jpg">
-                                <small>Paste a direct image URL</small>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Or Upload Cover Image</label>
-                                <input type="file" id="formCoverFile" accept="image/*">
-                                <small>Upload a JPG, PNG, or GIF image</small>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Status</label>
-                                <select id="formStatusInput">
-                                    <option value="reading">Reading</option>
-                                    <option value="completed">Completed</option>
-                                    <option value="plan-to-read">Plan to Read</option>
-                                </select>
-                            </div>
+                            <div class="form-group"><label>Cover URL</label><input type="url" id="formCoverInput" placeholder="https://example.com/cover.jpg"><small>Paste a direct image URL</small></div>
+                            <div class="form-group"><label>Or Upload Cover</label><input type="file" id="formCoverFile" accept="image/*"><small>Upload JPG, PNG, or GIF</small></div>
+                            <div class="form-group"><label>Status</label><select id="formStatusInput"><option value="reading">Reading</option><option value="completed">Completed</option><option value="plan-to-read">Plan to Read</option></select></div>
                         </div>
-
                         <hr>
                         <h3><i class="fas fa-layer-group"></i> Volumes</h3>
                         <p class="help-text">Each volume can have a Google Drive file ID, a direct link, or an uploaded file.</p>
-
-                        <div id="formVolumesContainer">
-                            <!-- Volume entry generated by JavaScript -->
-                        </div>
-
-                        <button type="button" class="btn-add-volume" id="formAddVolumeBtn">
-                            <i class="fas fa-plus"></i> Add Volume
-                        </button>
-
+                        <div id="formVolumesContainer"></div>
+                        <button type="button" class="btn-add-volume" id="formAddVolumeBtn"><i class="fas fa-plus"></i> Add Volume</button>
                         <div class="form-actions">
-                            <button type="submit" class="btn-primary" id="formSubmitBtn">
-                                <i class="fas fa-save"></i> Save Novel
-                            </button>
+                            <button type="submit" class="btn-primary" id="formSubmitBtn"><i class="fas fa-save"></i> Save Novel</button>
                             <button type="reset" class="btn-secondary" id="formCancelBtn">Cancel</button>
                         </div>
                     </form>
                 </div>
 
-                <!-- Novel Grid (A-Z) -->
+                <!-- Novel Grid -->
                 <div id="novelGridContainer" class="novel-grid">
                     <div class="empty-state">No novels found. Click "Add Novel" to get started.</div>
                 </div>
@@ -191,9 +143,7 @@
                 <h2 id="readerTitle">Reading</h2>
                 <button class="modal-close" id="readerClose">&times;</button>
             </div>
-            <div class="modal-body" id="readerBody">
-                <div class="loading">Loading content...</div>
-            </div>
+            <div class="modal-body" id="readerBody"><div class="loading">Loading content...</div></div>
         </div>
     </div>
 

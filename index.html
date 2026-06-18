@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Novel Library – Home</title>
+    <title>Novel Library</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,7 +20,6 @@
             </div>
             <nav class="sidebar-nav">
                 <a href="index.html" class="nav-link active"><i class="fas fa-home"></i> Home</a>
-                <a href="list.html" class="nav-link"><i class="fas fa-list"></i> Manage Novels</a>
                 <a href="history.html" class="nav-link"><i class="fas fa-clock-rotate-left"></i> History</a>
             </nav>
             <div class="sidebar-footer">
@@ -28,12 +27,8 @@
                     <i class="fab fa-google-drive"></i>
                     <span id="driveStatus">Loading...</span>
                 </button>
-                <!-- 🔥 Reconnect Drive button -->
                 <button class="btn-refresh" id="driveRefreshBtn" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-sync-alt"></i> Reconnect Drive
-                </button>
-                <button class="btn-refresh" id="forceReimportBtn" style="margin-left:8px;">
-                    <i class="fas fa-sync-alt"></i> Re‑import All (Fresh)
                 </button>
                 <button class="btn-refresh" onclick="clearPdfCache()" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-trash"></i> Clear PDF Cache
@@ -63,30 +58,122 @@
                 <div class="stat"><span class="stat-number" id="statHistory">0</span><span class="stat-label">History</span></div>
             </div>
 
-            <!-- Newest Novel -->
-            <section class="section">
-                <div class="section-header"><h2><i class="fas fa-star"></i> Newest Novel</h2></div>
-                <div id="newestNovelContainer" class="newest-novel-card">
-                    <div class="empty-state">No novels yet. <a href="list.html">Go to Manage</a></div>
-                </div>
-            </section>
-
             <!-- Currently Reading -->
             <section class="section">
                 <div class="section-header"><h2><i class="fas fa-book-open-reader"></i> Currently Reading</h2></div>
                 <div id="currentlyReadingContainer" class="currently-reading-grid">
-                    <div class="empty-state">You're not reading anything right now.</div>
+                    <div class="empty-state">No reading history yet. Read a volume to see it here.</div>
                 </div>
             </section>
 
-            <!-- Recent Volumes (up to 5) -->
+            <!-- All Novels (A-Z) -->
             <section class="section">
                 <div class="section-header">
-                    <h2><i class="fas fa-clock"></i> Recent Volumes</h2>
-                    <span class="badge">Latest 5</span>
+                    <h2><i class="fas fa-list"></i> All Novels</h2>
+                    <span class="badge" id="novelCount">0 novels</span>
+                    <div class="header-controls">
+                        <!-- Sort dropdown -->
+                        <div class="sort-wrapper">
+                            <label style="color:var(--text-secondary); font-size:0.85rem;">Sort:</label>
+                            <select id="sortSelect" style="background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:0.85rem;">
+                                <option value="az">A → Z</option>
+                                <option value="za">Z → A</option>
+                                <option value="newest">Newest</option>
+                                <option value="oldest">Oldest</option>
+                            </select>
+                        </div>
+
+                        <!-- Add Novel button -->
+                        <button class="btn-primary" id="showAddFormBtn">
+                            <i class="fas fa-plus"></i> Add Novel
+                        </button>
+
+                        <!-- Control Grid (2x2) -->
+                        <div class="control-grid">
+                            <button class="btn-primary" id="refreshDriveBtn">
+                                <i class="fas fa-cloud-upload-alt"></i> Import Drive
+                            </button>
+                            <button class="btn-primary" id="importCsvBtn">
+                                <i class="fas fa-file-import"></i> Import CSV
+                            </button>
+                            <button class="btn-refresh" id="importLinkBtn">
+                                <i class="fas fa-link"></i> Import Link
+                            </button>
+                            <button class="btn-refresh" id="forceReimportBtn">
+                                <i class="fas fa-sync-alt"></i> Re‑import All
+                            </button>
+                        </div>
+                        <input type="file" id="csvFileInput" accept=".csv" style="display:none;">
+                    </div>
                 </div>
-                <div id="recentVolumesContainer" class="volumes-grid">
-                    <div class="empty-state">No volumes added yet. <a href="list.html">Add some</a></div>
+
+                <!-- Add/Edit Form -->
+                <div id="novelFormContainer" style="display:none; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 24px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <h3 id="formTitle"><i class="fas fa-plus-circle"></i> Add New Novel</h3>
+                        <button class="modal-close" id="closeFormBtn" style="font-size:1.5rem; background:none; border:none; color:var(--text-secondary); cursor:pointer;">&times;</button>
+                    </div>
+                    <form id="novelForm" class="add-form" style="padding:0; background:transparent; border:none;">
+                        <input type="hidden" id="editNovelId" value="">
+                        <div class="form-row">
+                            <div class="form-group" style="flex:1;">
+                                <label>Title *</label>
+                                <input type="text" id="formTitleInput" placeholder="e.g. The Silent Kingdom" required>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Author *</label>
+                                <input type="text" id="formAuthorInput" placeholder="e.g. Jane Doe" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Description</label>
+                            <textarea id="formDescriptionInput" rows="2" placeholder="A brief synopsis..."></textarea>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex:1;">
+                                <label>Cover URL</label>
+                                <input type="url" id="formCoverInput" placeholder="https://example.com/cover.jpg">
+                                <small>Paste a direct image URL</small>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Or Upload Cover Image</label>
+                                <input type="file" id="formCoverFile" accept="image/*">
+                                <small>Upload a JPG, PNG, or GIF image</small>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Status</label>
+                                <select id="formStatusInput">
+                                    <option value="reading">Reading</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="plan-to-read">Plan to Read</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <hr>
+                        <h3><i class="fas fa-layer-group"></i> Volumes</h3>
+                        <p class="help-text">Each volume can have a Google Drive file ID, a direct link, or an uploaded file.</p>
+
+                        <div id="formVolumesContainer">
+                            <!-- Volume entry generated by JavaScript -->
+                        </div>
+
+                        <button type="button" class="btn-add-volume" id="formAddVolumeBtn">
+                            <i class="fas fa-plus"></i> Add Volume
+                        </button>
+
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary" id="formSubmitBtn">
+                                <i class="fas fa-save"></i> Save Novel
+                            </button>
+                            <button type="reset" class="btn-secondary" id="formCancelBtn">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Novel Grid (A-Z) -->
+                <div id="novelGridContainer" class="novel-grid">
+                    <div class="empty-state">No novels found. Click "Add Novel" to get started.</div>
                 </div>
             </section>
         </main>

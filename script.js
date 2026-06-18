@@ -714,14 +714,12 @@ function renderCurrentlyReading() {
     const container = document.getElementById('currentlyReadingContainer');
     if (!section || !container) return;
 
-    // Get novels with status 'reading' AND have history
     const reading = appData.novels.filter(n => {
         if (n.status !== 'reading') return false;
         const lastInfo = getLastReadInfo(n.id);
         return lastInfo !== null;
     });
 
-    // Sort by last read date (most recent first)
     const sorted = reading.sort((a, b) => {
         const lastA = getLastReadInfo(a.id);
         const lastB = getLastReadInfo(b.id);
@@ -730,17 +728,14 @@ function renderCurrentlyReading() {
         return dateB - dateA;
     });
 
-    // Take only the 7 most recent
     const latest7 = sorted.slice(0, 7);
 
     if (latest7.length === 0) {
-        // Hide the entire section
         section.style.display = 'none';
         container.innerHTML = '';
         return;
     }
 
-    // Show the section
     section.style.display = 'block';
     const badge = document.getElementById('readingBadge');
     if (badge) badge.textContent = `Latest ${latest7.length}`;
@@ -885,7 +880,6 @@ document.getElementById('readerModal')?.addEventListener('click', function(e) {
 
 async function fetchFileContent(fileId) {
     try {
-        // 1. Check cache
         const cachedData = await getCachedPdf(fileId);
         if (cachedData) {
             console.log('✅ Loaded from cache:', fileId);
@@ -898,14 +892,12 @@ async function fetchFileContent(fileId) {
             return;
         }
 
-        // 2. If it's a local file (starts with "local_") but not in cache (shouldn't happen), show error
         if (fileId.startsWith('local_')) {
             document.getElementById('readerBody').innerHTML = '<div class="loading" style="color:#f87171;">Local file not found in cache.</div>';
             showToast('Local file missing. Please re-upload.', 'error');
             return;
         }
 
-        // 3. Otherwise, try Drive
         const token = gapi.client.getToken();
         if (!token) {
             showToast('Not authenticated. Please reconnect Drive.', 'error');
@@ -1016,7 +1008,7 @@ async function renderPdf(arrayBuffer) {
 }
 
 // ============================================================
-// IMPORT FROM LINK (NEW)
+// IMPORT FROM LINK
 // ============================================================
 async function importFromLink() {
     const url = prompt('Enter the direct download URL (PDF or TXT):');
@@ -1037,7 +1029,6 @@ async function importFromLink() {
         const fileId = 'link_' + Date.now() + '_' + fileName;
         await savePdfToCache(fileId, arrayBuffer);
 
-        // Create a novel with one volume
         const title = prompt('Enter novel title:', fileName.replace(/\.[^.]+$/, ''));
         if (!title) return;
         const author = prompt('Enter author name:', 'Unknown');
@@ -1195,7 +1186,7 @@ function deleteNovelFromDetail() {
 }
 
 // ============================================================
-// FORM HANDLING (for index.html)
+// FORM HANDLING
 // ============================================================
 function resetForm() {
     document.getElementById('editNovelId').value = '';
@@ -1245,7 +1236,39 @@ function parseCSV(text) {
 document.addEventListener('DOMContentLoaded', function() {
     const page = window.location.pathname.split('/').pop() || 'index.html';
 
-    // ----- HOME PAGE -----
+    // ===== SIDEBAR TOGGLE (mobile) =====
+    const menuToggle = document.getElementById('menuToggle');
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+
+    function closeSidebar() {
+        sidebar.classList.remove('open');
+        if (backdrop) backdrop.classList.remove('active');
+    }
+
+    window.closeSidebar = closeSidebar;
+
+    if (menuToggle) {
+        menuToggle.addEventListener('click', function(e) {
+            e.stopPropagation();
+            sidebar.classList.toggle('open');
+            if (backdrop) backdrop.classList.toggle('active');
+        });
+    }
+
+    if (backdrop) {
+        backdrop.addEventListener('click', closeSidebar);
+    }
+
+    document.querySelectorAll('.sidebar-nav .nav-link').forEach(link => {
+        link.addEventListener('click', function() {
+            if (window.innerWidth <= 820) {
+                closeSidebar();
+            }
+        });
+    });
+
+    // ===== HOME PAGE =====
     if (page === 'index.html' || page === '') {
         renderAll();
 
@@ -1253,13 +1276,11 @@ document.addEventListener('DOMContentLoaded', function() {
             setTimeout(() => showToast('👋 Welcome! Add a novel or import from Drive.', 'info'), 800);
         }
 
-        // Sort dropdown
         document.getElementById('sortSelect')?.addEventListener('change', function() {
             currentSort = this.value;
             renderNovelGrid();
         });
 
-        // Show add form
         document.getElementById('showAddFormBtn')?.addEventListener('click', function() {
             resetForm();
             document.getElementById('novelFormContainer').style.display = 'block';
@@ -1285,7 +1306,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const author = document.getElementById('formAuthorInput').value.trim();
             if (!title || !author) return showToast('Title and author required', 'error');
 
-            // Gather volumes with possible file uploads
             const volumeEntries = document.querySelectorAll('#formVolumesContainer .volume-entry');
             const volumes = [];
             const filesToUpload = [];
@@ -1351,7 +1371,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 showToast(`Added "${title}"`, 'success');
             }
 
-            // Process file uploads
             if (filesToUpload.length > 0) {
                 for (const f of filesToUpload) {
                     const file = f.file;
@@ -1372,7 +1391,6 @@ document.addEventListener('DOMContentLoaded', function() {
             resetForm();
         });
 
-        // Import from Drive
         document.getElementById('refreshDriveBtn')?.addEventListener('click', function() {
             if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
                 listDriveFiles();
@@ -1381,7 +1399,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        // Import CSV
         document.getElementById('importCsvBtn')?.addEventListener('click', function() {
             document.getElementById('csvFileInput').click();
         });
@@ -1461,10 +1478,8 @@ document.addEventListener('DOMContentLoaded', function() {
             reader.readAsText(file);
         });
 
-        // Import from Link
         document.getElementById('importLinkBtn')?.addEventListener('click', importFromLink);
 
-        // Re-import All
         document.getElementById('forceReimportBtn')?.addEventListener('click', function() {
             console.log('🔄 Re-import button clicked');
             if (!confirm('This will delete all Drive-imported novels and re-import from scratch. Continue?')) return;
@@ -1497,12 +1512,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // ----- HISTORY PAGE -----
+    // ===== HISTORY PAGE =====
     if (page === 'history.html') {
         renderFullHistory();
     }
 
-    // ----- DETAIL PAGE -----
+    // ===== DETAIL PAGE =====
     if (page === 'detail.html') {
         loadDetailPage();
 
@@ -1628,7 +1643,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // ----- SHARED ELEMENTS -----
+    // ===== SHARED ELEMENTS =====
 
     document.getElementById('driveConnectBtn')?.addEventListener('click', function() {
         const status = document.getElementById('driveStatus');
@@ -1642,8 +1657,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('driveRefreshBtn')?.addEventListener('click', refreshDriveConnection);
 
     document.getElementById('menuToggle')?.addEventListener('click', function() {
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar) sidebar.classList.toggle('open');
+        // Already handled above
     });
 
     document.getElementById('searchInput')?.addEventListener('input', function() {

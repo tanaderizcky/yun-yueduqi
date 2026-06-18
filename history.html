@@ -19,7 +19,6 @@
             </div>
             <nav class="sidebar-nav">
                 <a href="index.html" class="nav-link"><i class="fas fa-home"></i> Home</a>
-                <a href="list.html" class="nav-link"><i class="fas fa-list"></i> Manage Novels</a>
                 <a href="history.html" class="nav-link active"><i class="fas fa-clock-rotate-left"></i> History</a>
             </nav>
             <div class="sidebar-footer">
@@ -29,9 +28,6 @@
                 </button>
                 <button class="btn-refresh" id="driveRefreshBtn" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-sync-alt"></i> Reconnect Drive
-                </button>
-                <button class="btn-refresh" id="forceReimportBtn" style="margin-left:8px;">
-                    <i class="fas fa-sync-alt"></i> Re‑import All (Fresh)
                 </button>
                 <button class="btn-refresh" onclick="clearPdfCache()" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-trash"></i> Clear PDF Cache
@@ -61,8 +57,21 @@
 
     <div id="toast" class="toast"></div>
 
+    <div class="modal-overlay" id="readerModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="readerTitle">Reading</h2>
+                <button class="modal-close" id="readerClose">&times;</button>
+            </div>
+            <div class="modal-body" id="readerBody">
+                <div class="loading">Loading content...</div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://apis.google.com/js/api.js"></script>
     <script src="https://accounts.google.com/gsi/client"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

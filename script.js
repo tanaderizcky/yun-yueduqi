@@ -58,7 +58,7 @@ function formatDate(dateStr) {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-// 🔥 NEW: Format volume number (preserve decimals)
+// 🔥 Format volume number (preserve decimals)
 function formatVolNumber(num) {
     if (num === undefined || num === null) return '?';
     if (Number.isInteger(num)) return num.toString();
@@ -429,19 +429,19 @@ async function listDriveFiles() {
     }
 }
 
-// 🔥 UPDATED: Supports decimals and keeps the rest as title
+// ============================================================
+// 🔥 SYNC FUNCTIONS – REFRESH (adds new volumes, never deletes)
+// ============================================================
+
 function syncNovelsFromFolders(novelData) {
     let updated = false;
     for (const data of novelData) {
         const existing = appData.novels.find(n => n.title === data.title);
-        if (existing) {
-            console.log(`⏭️ Novel "${data.title}" already exists, skipping.`);
-            continue;
-        }
         let latestModified = null;
-        const vols = data.volumes.map((v) => {
+
+        // Build new volumes with extracted numbers and titles
+        const newVols = data.volumes.map((v) => {
             const fullTitle = v.title || '';
-            // Extract number (including decimals) after Vol/Volume/V
             const match = fullTitle.match(/Vol\s*([\d.]+)|Volume\s*([\d.]+)|V\s*([\d.]+)/i);
             let num = 0;
             let title = fullTitle;
@@ -463,32 +463,69 @@ function syncNovelsFromFolders(novelData) {
                 modifiedTime: v.modifiedTime || null,
             };
         });
-        vols.sort((a, b) => a.number - b.number);
-        appData.novels.push({
-            id: generateId(),
-            title: data.title,
-            author: 'Unknown',
-            description: `Auto-imported from Drive (${vols.length} volumes)`,
-            cover: DEFAULT_COVER,
-            status: 'reading',
-            volumes: vols,
-            addedAt: new Date().toISOString(),
-            fromDrive: true,
-            driveModifiedDate: latestModified ? latestModified.toISOString() : null,
-        });
-        updated = true;
-        console.log(`✅ Added novel: "${data.title}" with ${vols.length} volumes`);
+
+        if (existing) {
+            // ✅ Update existing novel – add missing volumes
+            const existingFileIds = new Set(existing.volumes.map(v => v.fileId));
+            let addedCount = 0;
+            newVols.forEach(newVol => {
+                if (!existingFileIds.has(newVol.fileId)) {
+                    existing.volumes.push(newVol);
+                    addedCount++;
+                    // Add history entry for the new volume
+                    appData.history.push({
+                        novelId: existing.id,
+                        volumeIndex: existing.volumes.length - 1,
+                        date: new Date().toISOString()
+                    });
+                }
+            });
+            if (addedCount > 0) {
+                existing.volumes.sort((a, b) => a.number - b.number);
+                if (latestModified) {
+                    existing.driveModifiedDate = latestModified.toISOString();
+                }
+                updated = true;
+                console.log(`✅ Updated "${data.title}" – added ${addedCount} new volume(s)`);
+            } else {
+                console.log(`⏭️ "${data.title}" already up to date.`);
+            }
+        } else {
+            // ➕ Create new novel
+            newVols.sort((a, b) => a.number - b.number);
+            const newNovel = {
+                id: generateId(),
+                title: data.title,
+                author: 'Unknown',
+                description: `Auto-imported from Drive (${newVols.length} volumes)`,
+                cover: DEFAULT_COVER,
+                status: 'reading',
+                volumes: newVols,
+                addedAt: new Date().toISOString(),
+                fromDrive: true,
+                driveModifiedDate: latestModified ? latestModified.toISOString() : null,
+            };
+            appData.novels.push(newNovel);
+            newVols.forEach((vol, idx) => {
+                appData.history.push({
+                    novelId: newNovel.id,
+                    volumeIndex: idx,
+                    date: new Date().toISOString()
+                });
+            });
+            updated = true;
+            console.log(`✅ Added new novel: "${data.title}"`);
+        }
     }
     if (updated) {
         saveData(appData);
         renderAll();
-        showToast('Imported novels from Drive!', 'success');
+        showToast('Refreshed novels from Drive!', 'success');
     } else {
-        showToast('No new novels to import.', 'info');
+        showToast('No new volumes found.', 'info');
     }
 }
 
-// 🔥 UPDATED: Supports decimals and keeps the rest as title
 function syncNovelsFromFlat(files) {
     const groups = {};
     files.forEach(file => {
@@ -500,12 +537,10 @@ function syncNovelsFromFlat(files) {
     console.log('📊 Groups from flat files:', Object.keys(groups));
     let updated = false;
     for (const [title, fileList] of Object.entries(groups)) {
-        if (appData.novels.some(n => n.title === title)) {
-            console.log(`⏭️ Novel "${title}" already exists, skipping.`);
-            continue;
-        }
+        const existing = appData.novels.find(n => n.title === title);
         let latestModified = null;
-        const volumes = fileList.map((f) => {
+
+        const newVols = fileList.map((f) => {
             const fullTitle = f.name.replace(/\.[^.]+$/, '');
             const match = fullTitle.match(/Vol\s*([\d.]+)|Volume\s*([\d.]+)|V\s*([\d.]+)/i);
             let num = 0;
@@ -528,26 +563,63 @@ function syncNovelsFromFlat(files) {
                 modifiedTime: f.modifiedTime || null,
             };
         });
-        volumes.sort((a, b) => a.number - b.number);
-        appData.novels.push({
-            id: generateId(),
-            title,
-            author: 'Unknown',
-            description: `Auto-imported from Drive (${volumes.length} volumes)`,
-            cover: DEFAULT_COVER,
-            status: 'reading',
-            volumes: volumes,
-            addedAt: new Date().toISOString(),
-            fromDrive: true,
-            driveModifiedDate: latestModified ? latestModified.toISOString() : null,
-        });
-        updated = true;
-        console.log(`✅ Added novel: "${title}" with ${volumes.length} volumes`);
+
+        if (existing) {
+            // Update existing novel
+            const existingFileIds = new Set(existing.volumes.map(v => v.fileId));
+            let addedCount = 0;
+            newVols.forEach(newVol => {
+                if (!existingFileIds.has(newVol.fileId)) {
+                    existing.volumes.push(newVol);
+                    addedCount++;
+                    appData.history.push({
+                        novelId: existing.id,
+                        volumeIndex: existing.volumes.length - 1,
+                        date: new Date().toISOString()
+                    });
+                }
+            });
+            if (addedCount > 0) {
+                existing.volumes.sort((a, b) => a.number - b.number);
+                if (latestModified) existing.driveModifiedDate = latestModified.toISOString();
+                updated = true;
+                console.log(`✅ Updated "${title}" – added ${addedCount} new volume(s)`);
+            } else {
+                console.log(`⏭️ "${title}" already up to date.`);
+            }
+        } else {
+            // Create new novel
+            newVols.sort((a, b) => a.number - b.number);
+            const newNovel = {
+                id: generateId(),
+                title,
+                author: 'Unknown',
+                description: `Auto-imported from Drive (${newVols.length} volumes)`,
+                cover: DEFAULT_COVER,
+                status: 'reading',
+                volumes: newVols,
+                addedAt: new Date().toISOString(),
+                fromDrive: true,
+                driveModifiedDate: latestModified ? latestModified.toISOString() : null,
+            };
+            appData.novels.push(newNovel);
+            newVols.forEach((vol, idx) => {
+                appData.history.push({
+                    novelId: newNovel.id,
+                    volumeIndex: idx,
+                    date: new Date().toISOString()
+                });
+            });
+            updated = true;
+            console.log(`✅ Added new novel: "${title}"`);
+        }
     }
     if (updated) {
         saveData(appData);
         renderAll();
-        showToast('Imported novels from Drive!', 'success');
+        showToast('Refreshed novels from Drive!', 'success');
+    } else {
+        showToast('No new volumes found.', 'info');
     }
 }
 
@@ -689,7 +761,6 @@ function renderNovelGrid() {
             const readBtn = hasFile
                 ? `<button class="btn-secondary" style="font-size:0.6rem; padding:2px 8px;" onclick="openReader('${n.id}', ${idx})">📖 Read</button>`
                 : `<span style="color:#9aa3b8;font-size:0.6rem;">No file</span>`;
-            // 🔥 Use formatVolNumber for display
             const volDisplay = `Vol.${formatVolNumber(v.number)}`;
             const titleDisplay = v.title ? ` – ${escapeHtml(v.title)}` : '';
             return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #2f3748;">
@@ -1503,18 +1574,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         document.getElementById('importLinkBtn')?.addEventListener('click', importFromLink);
 
+        // 🔥 REFRESH BUTTON – syncs new volumes without deleting anything
         document.getElementById('forceReimportBtn')?.addEventListener('click', function() {
-            console.log('🔄 Re-import button clicked');
-            if (!confirm('This will delete all Drive-imported novels and re-import from scratch. Continue?')) return;
-            const originalCount = appData.novels.length;
-            appData.novels = appData.novels.filter(n => !n.fromDrive);
-            const driveNovelIds = appData.novels.filter(n => n.fromDrive).map(n => n.id);
-            appData.history = appData.history.filter(h => !driveNovelIds.includes(h.novelId));
-            saveData(appData);
-            console.log(`🗑️ Deleted ${originalCount - appData.novels.length} Drive novels`);
-            renderAll();
+            console.log('🔄 Refresh button clicked – syncing new volumes...');
             if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
-                console.log('📂 Re-listing Drive files...');
                 listDriveFiles();
             } else {
                 showToast('Connect Drive first', 'error');

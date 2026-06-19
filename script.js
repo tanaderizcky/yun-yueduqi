@@ -58,6 +58,13 @@ function formatDate(dateStr) {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// 🔥 NEW: Format volume number (preserve decimals)
+function formatVolNumber(num) {
+    if (num === undefined || num === null) return '?';
+    if (Number.isInteger(num)) return num.toString();
+    return num.toString();
+}
+
 // ============================================================
 // COVER UPLOAD
 // ============================================================
@@ -422,6 +429,7 @@ async function listDriveFiles() {
     }
 }
 
+// 🔥 UPDATED: Supports decimals and keeps the rest as title
 function syncNovelsFromFolders(novelData) {
     let updated = false;
     for (const data of novelData) {
@@ -431,11 +439,15 @@ function syncNovelsFromFolders(novelData) {
             continue;
         }
         let latestModified = null;
-        const vols = data.volumes.map((v, idx) => {
-            let num = idx + 1;
-            const match = v.title.match(/Vol\s*(\d+)|Volume\s*(\d+)|V\s*(\d+)/i);
+        const vols = data.volumes.map((v) => {
+            const fullTitle = v.title || '';
+            // Extract number (including decimals) after Vol/Volume/V
+            const match = fullTitle.match(/Vol\s*([\d.]+)|Volume\s*([\d.]+)|V\s*([\d.]+)/i);
+            let num = 0;
+            let title = fullTitle;
             if (match) {
-                num = parseInt(match[1] || match[2] || match[3]) || idx + 1;
+                num = parseFloat(match[1] || match[2] || match[3]);
+                title = fullTitle.replace(match[0], '').trim();
             }
             if (v.modifiedTime) {
                 const modDate = new Date(v.modifiedTime);
@@ -445,7 +457,7 @@ function syncNovelsFromFolders(novelData) {
             }
             return {
                 number: num,
-                title: v.title,
+                title: title,
                 fileId: v.fileId,
                 mimeType: v.mimeType,
                 modifiedTime: v.modifiedTime || null,
@@ -465,7 +477,7 @@ function syncNovelsFromFolders(novelData) {
             driveModifiedDate: latestModified ? latestModified.toISOString() : null,
         });
         updated = true;
-        console.log(`✅ Added novel: "${data.title}" with ${vols.length} volumes, latest modified: ${latestModified}`);
+        console.log(`✅ Added novel: "${data.title}" with ${vols.length} volumes`);
     }
     if (updated) {
         saveData(appData);
@@ -476,11 +488,12 @@ function syncNovelsFromFolders(novelData) {
     }
 }
 
+// 🔥 UPDATED: Supports decimals and keeps the rest as title
 function syncNovelsFromFlat(files) {
     const groups = {};
     files.forEach(file => {
         let name = file.name.replace(/\.[^.]+$/, '');
-        let novelName = name.replace(/[-–—]\s*(?:Vol|Volume|V)\s*\d+/i, '').trim() || name;
+        let novelName = name.replace(/[-–—]\s*(?:Vol|Volume|V)\s*\d+\.?\d*/i, '').trim() || name;
         if (!groups[novelName]) groups[novelName] = [];
         groups[novelName].push(file);
     });
@@ -492,10 +505,15 @@ function syncNovelsFromFlat(files) {
             continue;
         }
         let latestModified = null;
-        const volumes = fileList.map((f, i) => {
-            let num = i + 1;
-            const m = f.name.match(/Vol\s*(\d+)|Volume\s*(\d+)|V\s*(\d+)/i);
-            if (m) num = parseInt(m[1] || m[2] || m[3]) || i + 1;
+        const volumes = fileList.map((f) => {
+            const fullTitle = f.name.replace(/\.[^.]+$/, '');
+            const match = fullTitle.match(/Vol\s*([\d.]+)|Volume\s*([\d.]+)|V\s*([\d.]+)/i);
+            let num = 0;
+            let volTitle = fullTitle;
+            if (match) {
+                num = parseFloat(match[1] || match[2] || match[3]);
+                volTitle = fullTitle.replace(match[0], '').trim();
+            }
             if (f.modifiedTime) {
                 const modDate = new Date(f.modifiedTime);
                 if (!latestModified || modDate > latestModified) {
@@ -504,7 +522,7 @@ function syncNovelsFromFlat(files) {
             }
             return {
                 number: num,
-                title: f.name.replace(/\.[^.]+$/, ''),
+                title: volTitle,
                 fileId: f.id,
                 mimeType: f.mimeType,
                 modifiedTime: f.modifiedTime || null,
@@ -524,7 +542,7 @@ function syncNovelsFromFlat(files) {
             driveModifiedDate: latestModified ? latestModified.toISOString() : null,
         });
         updated = true;
-        console.log(`✅ Added novel: "${title}" with ${volumes.length} volumes, latest modified: ${latestModified}`);
+        console.log(`✅ Added novel: "${title}" with ${volumes.length} volumes`);
     }
     if (updated) {
         saveData(appData);
@@ -582,11 +600,11 @@ function createVolumeEntry(num, title, fileId) {
         <div class="form-row">
             <div class="form-group" style="flex:0 0 80px;">
                 <label>#</label>
-                <input type="number" class="form-vol-number" value="${num}" min="1" required>
+                <input type="number" class="form-vol-number" value="${num}" min="1" step="any" required>
             </div>
             <div class="form-group" style="flex:2;">
                 <label>Title</label>
-                <input type="text" class="form-vol-title" value="${escapeHtml(title)}" placeholder="Volume title">
+                <input type="text" class="form-vol-title" value="${escapeHtml(title)}" placeholder="Volume title (e.g., side story)">
             </div>
             <div class="form-group" style="flex:2;">
                 <label>File ID / Link</label>
@@ -671,8 +689,11 @@ function renderNovelGrid() {
             const readBtn = hasFile
                 ? `<button class="btn-secondary" style="font-size:0.6rem; padding:2px 8px;" onclick="openReader('${n.id}', ${idx})">📖 Read</button>`
                 : `<span style="color:#9aa3b8;font-size:0.6rem;">No file</span>`;
+            // 🔥 Use formatVolNumber for display
+            const volDisplay = `Vol.${formatVolNumber(v.number)}`;
+            const titleDisplay = v.title ? ` – ${escapeHtml(v.title)}` : '';
             return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #2f3748;">
-                        <span style="font-weight:500;">Vol.${v.number || idx+1}</span>
+                        <span style="font-weight:500;">${volDisplay}${titleDisplay}</span>
                         ${readBtn}
                     </div>`;
         }).join('');
@@ -746,7 +767,7 @@ function renderCurrentlyReading() {
         const lastInfo = getLastReadInfo(n.id);
         const lastVolNum = lastInfo ? getVolumeNumber(n, lastInfo.volumeIndex) : null;
         const lastDate = lastInfo ? formatDate(lastInfo.date) : 'Not read yet';
-        const latestInfo = lastVolNum ? `Vol.${lastVolNum}` : '—';
+        const latestInfo = lastVolNum ? `Vol.${formatVolNumber(lastVolNum)}` : '—';
 
         return `
             <div class="reading-card" onclick="window.location.href='detail.html?id=${n.id}'">
@@ -852,8 +873,9 @@ window.openReader = function(novelId, volIndex) {
 
     currentNovelId = novelId;
     currentVolumeIndex = volIndex;
-    const title = `${novel.title} – Vol.${vol.number || volIndex+1}`;
-    document.getElementById('readerTitle').textContent = title;
+    const title = `${novel.title} – Vol.${formatVolNumber(vol.number)}`;
+    if (vol.title) document.getElementById('readerTitle').textContent = title + ' – ' + vol.title;
+    else document.getElementById('readerTitle').textContent = title;
     document.getElementById('readerBody').innerHTML = '<div class="loading">Loading file...</div>';
     document.getElementById('readerModal').classList.add('active');
 
@@ -1119,12 +1141,13 @@ function renderDetailVolumes(novel) {
         const clickHandler = isValidFile ? `onclick="openReader('${novel.id}', ${idx})"` : '';
         const cursorStyle = isValidFile ? 'cursor:pointer;' : 'cursor:default;';
         const hoverBorder = isValidFile ? 'hover:border-color:var(--accent);' : '';
+        const volDisplay = `Vol.${formatVolNumber(v.number)}`;
+        const titleDisplay = v.title ? ` – ${escapeHtml(v.title)}` : '';
         
         return `
             <div class="history-item" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; ${cursorStyle} transition:var(--transition); ${hoverBorder}" ${clickHandler}>
                 <div style="flex:1; min-width:0;">
-                    <strong>Vol. ${v.number || idx+1}</strong>
-                    <span style="margin-left:12px; color:var(--text-secondary);">${escapeHtml(v.title || 'Untitled')}</span>
+                    <strong>${volDisplay}${titleDisplay}</strong>
                     ${v.fileId ? `<span style="margin-left:12px; font-size:0.7rem; color:var(--text-secondary); opacity:0.6; word-break:break-all;">${escapeHtml(v.fileId.substring(0, 16))}...</span>` : ''}
                     ${!isValidFile ? '<span style="margin-left:12px; font-size:0.7rem; color:#f87171;">⚠️ No valid file</span>' : ''}
                 </div>
@@ -1311,8 +1334,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const filesToUpload = [];
 
             volumeEntries.forEach((entry, index) => {
-                const num = parseInt(entry.querySelector('.form-vol-number').value);
-                const t = entry.querySelector('.form-vol-title').value.trim() || `Volume ${num}`;
+                const num = parseFloat(entry.querySelector('.form-vol-number').value);
+                const t = entry.querySelector('.form-vol-title').value.trim() || '';
                 let fid = entry.querySelector('.form-vol-fileid').value.trim();
                 fid = extractFileId(fid) || fid;
                 const fileInput = entry.querySelector('.form-vol-file');
@@ -1611,8 +1634,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const novel = appData.novels.find(n => n.id === detailNovelId);
             if (!novel) return showToast('Novel not found', 'error');
 
-            const num = parseInt(document.getElementById('detailVolNumber').value);
-            const title = document.getElementById('detailVolTitle').value.trim() || `Volume ${num}`;
+            const num = parseFloat(document.getElementById('detailVolNumber').value);
+            const title = document.getElementById('detailVolTitle').value.trim() || '';
             let fileId = document.getElementById('detailVolFileId').value.trim();
             fileId = extractFileId(fileId) || fileId;
 

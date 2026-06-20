@@ -15,6 +15,10 @@ let coverMapping = {};
 let coverFileMap = {};
 let csvLoadError = null;
 
+// Debounce: prevent multiple syncs within 60 seconds
+let lastSyncTime = 0;
+const SYNC_DEBOUNCE_MS = 60000; // 1 minute
+
 function loadData() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
@@ -74,7 +78,7 @@ function truncateTitle(title, maxLen = 50) {
 }
 
 // ================================================================
-// SMART VOLUME NAME PARSER – Vol.X – Name – Special
+// SMART VOLUME NAME PARSER
 // ================================================================
 function parseVolumeName(fullTitle) {
     const match = fullTitle.match(/(Vol|Volume|V)\s*([\d.]+)/i);
@@ -104,7 +108,7 @@ function parseVolumeName(fullTitle) {
     return {
         number: num,
         mainName: mainName,
-        special: special || null,  // ensure null if empty
+        special: special || null,
         displayName: displayName
     };
 }
@@ -438,6 +442,7 @@ function restoreToken() {
 // GOOGLE API LOADING
 // ================================================================
 let gapiInited = false, gisInited = false, tokenClient = null;
+let syncedOnce = false; // prevent repeated auto-sync
 
 function loadGoogleApis() {
     const check = setInterval(() => {
@@ -463,11 +468,14 @@ function checkBothReady() {
     if (gapiInited && gisInited) {
         const btn = document.getElementById('driveConnectBtn');
         if (btn) { btn.disabled = false; document.getElementById('driveStatus').textContent = 'Connect Drive'; }
-        if (restoreToken()) {
+        // Only auto-sync once per session and only if not synced yet
+        if (restoreToken() && !syncedOnce) {
+            syncedOnce = true;
             document.getElementById('driveStatus').textContent = 'Connected ✅';
             const btn = document.getElementById('driveConnectBtn');
             if (btn) btn.style.borderColor = '#4ade80';
-            listDriveFiles();
+            // Auto-sync – suppress success toast
+            listDriveFiles(false);
         }
     }
 }
@@ -478,7 +486,8 @@ function refreshDriveConnection() {
             document.getElementById('driveStatus').textContent = 'Connected ✅';
             const btn = document.getElementById('driveConnectBtn');
             if (btn) btn.style.borderColor = '#4ade80';
-            listDriveFiles();
+            // Manual sync – show toast
+            listDriveFiles(true);
             showToast('Drive reconnected!', 'success');
         } else {
             showToast('Not connected to Drive. Click "Connect Drive".', 'info');
@@ -500,7 +509,8 @@ function handleAuthClick() {
         const btn = document.getElementById('driveConnectBtn');
         if (btn) btn.style.borderColor = '#4ade80';
         showToast('Connected to Google Drive!', 'success');
-        await listDriveFiles();
+        // Manual sync after login
+        await listDriveFiles(true);
     };
     if (gapi.client.getToken() === null) tokenClient.requestAccessToken({ prompt: 'consent' });
     else tokenClient.requestAccessToken({ prompt: '' });
@@ -523,7 +533,7 @@ function handleSignoutClick() {
 }
 
 // ================================================================
-// DRIVE API
+// DRIVE API – with folder path fallback
 // ================================================================
 
 async function findFolderId(folderPath) {
@@ -553,11 +563,51 @@ async function listFilesInFolder(folderId) {
     return res.result.files || [];
 }
 
-async function listDriveFiles() {
+async function listDriveFiles(manual = false) {
+    // Debounce: prevent frequent runs
+    const now = Date.now();
+    if (now - lastSyncTime < SYNC_DEBOUNCE_MS) {
+        console.log('⏳ Sync debounced – skipping (last sync was ' + (now - lastSyncTime) + 'ms ago)');
+        return;
+    }
+    lastSyncTime = now;
+
     const pathDisplay = document.getElementById('drivePathDisplay');
     if (pathDisplay) pathDisplay.textContent = '📁 Searching...';
 
     try {
+        // 1. Find j-novel folder – try multiple casing
+        const jNovelPaths = [
+            'file/pdf/j-novel',
+            'file/PDF/j-novel',
+            'file/pdf/J-Novel',
+            'file/PDF/J-Novel',
+            'file/pdf/J-novel',
+            'file/PDF/J-novel',
+            'j-novel',
+            'J-Novel'
+        ];
+
+        let rootId = null;
+        let foundPath = null;
+        for (const path of jNovelPaths) {
+            const id = await findFolderId(path);
+            if (id) {
+                rootId = id;
+                foundPath = path;
+                break;
+            }
+        }
+
+        if (!rootId) {
+            if (pathDisplay) pathDisplay.textContent = '📁 j-novel folder not found.';
+            // Only show toast if manual
+            if (manual) showToast('Folder "j-novel" not found. Check path.', 'error');
+            return;
+        }
+        if (pathDisplay) pathDisplay.textContent = `📁 ${foundPath}/`;
+
+        // 2. Find Novel Cover folder – try multiple casing
         const coverPaths = [
             'file/PDF/Novel Cover',
             'file/pdf/Novel Cover',
@@ -586,18 +636,10 @@ async function listDriveFiles() {
         }
 
         if (!coverFolderFound) {
-            console.warn('ℹ️ Novel Cover folder not found in any of these paths:', coverPaths);
-            console.warn('💡 Please create a folder "Novel Cover" inside your "file/PDF/" folder.');
+            console.warn('ℹ️ Novel Cover folder not found – covers will use default.');
         }
 
-        const rootId = await findFolderId('file/pdf/j-novel');
-        if (!rootId) {
-            if (pathDisplay) pathDisplay.textContent = '📁 /file/pdf/j-novel/ (not found)';
-            showToast('Folder "j-novel" not found.', 'error');
-            return;
-        }
-        if (pathDisplay) pathDisplay.textContent = '📁 /file/pdf/j-novel/';
-
+        // 3. Scan j-novel folder for subfolders (novels)
         const folders = await listSubfolders(rootId);
         if (folders.length > 0) {
             console.log(`📂 Found ${folders.length} novel folders`);
@@ -622,7 +664,7 @@ async function listDriveFiles() {
                     }))
                 });
             }
-            syncNovelsFromFolders(novelData);
+            syncNovelsFromFolders(novelData, manual);
         } else {
             const files = await listFilesInFolder(rootId);
             const validFiles = files.filter(f => {
@@ -631,8 +673,8 @@ async function listDriveFiles() {
                 const isText = f.mimeType === 'text/plain' || f.name.endsWith('.txt');
                 return isPdf || isText;
             });
-            if (validFiles.length > 0) syncNovelsFromFlat(validFiles);
-            else showToast('No PDF/TXT files found.', 'info');
+            if (validFiles.length > 0) syncNovelsFromFlat(validFiles, manual);
+            else if (manual) showToast('No PDF/TXT files found.', 'info');
         }
 
         applyCoverMapping();
@@ -647,8 +689,8 @@ async function listDriveFiles() {
 
     } catch (err) {
         console.error('Drive list error:', err);
-        if (pathDisplay) pathDisplay.textContent = '📁 /file/pdf/j-novel/ (error)';
-        showToast('Error: ' + err.message, 'error');
+        if (pathDisplay) pathDisplay.textContent = '📁 Error scanning Drive.';
+        if (manual) showToast('Error: ' + err.message, 'error');
     }
 }
 
@@ -670,10 +712,10 @@ function cleanupOrphanNovels() {
 }
 
 // ================================================================
-// SYNC FUNCTIONS – WITH CORRECT SORTING (NORMAL FIRST, THEN SPECIAL)
+// SYNC FUNCTIONS – with manual flag for toasts
 // ================================================================
 
-function syncNovelsFromFolders(novelData) {
+function syncNovelsFromFolders(novelData, manual = false) {
     let updated = false;
     for (const data of novelData) {
         const existing = appData.novels.find(n => n.title === data.title);
@@ -694,7 +736,7 @@ function syncNovelsFromFolders(novelData) {
                 number: num,
                 title: mainName,
                 displayName: displayName,
-                special: parsed.special, // store special flag for sorting
+                special: parsed.special,
                 fileId: v.fileId,
                 mimeType: v.mimeType,
                 modifiedTime: v.modifiedTime || null
@@ -749,7 +791,6 @@ function syncNovelsFromFolders(novelData) {
             }
 
             if (changed) {
-                // ✅ CORRECT SORT: normal (special==null) first, then special, each sorted by number
                 existingVols.sort((a, b) => {
                     if (a.special && !b.special) return 1;
                     if (!a.special && b.special) return -1;
@@ -760,7 +801,6 @@ function syncNovelsFromFolders(novelData) {
                 console.log(`✅ Synced "${data.title}"`);
             }
         } else {
-            // ✅ CORRECT SORT for new novels too
             newVols.sort((a, b) => {
                 if (a.special && !b.special) return 1;
                 if (!a.special && b.special) return -1;
@@ -786,13 +826,14 @@ function syncNovelsFromFolders(novelData) {
     if (updated) {
         saveData(appData);
         renderAll();
-        showToast('Refreshed novels from Drive!', 'success');
+        // Only show toast if manual
+        if (manual) showToast('Refreshed novels from Drive!', 'success');
     } else {
-        showToast('No changes detected in Drive.', 'info');
+        if (manual) showToast('No changes detected in Drive.', 'info');
     }
 }
 
-function syncNovelsFromFlat(files) {
+function syncNovelsFromFlat(files, manual = false) {
     const groups = {};
     files.forEach(file => {
         let name = file.name.replace(/\.[^.]+$/, '');
@@ -911,14 +952,14 @@ function syncNovelsFromFlat(files) {
     if (updated) {
         saveData(appData);
         renderAll();
-        showToast('Refreshed novels from Drive!', 'success');
+        if (manual) showToast('Refreshed novels from Drive!', 'success');
     } else {
-        showToast('No changes detected in Drive.', 'info');
+        if (manual) showToast('No changes detected in Drive.', 'info');
     }
 }
 
 // ================================================================
-// RENDER FUNCTIONS
+// RENDER FUNCTIONS – unchanged
 // ================================================================
 
 let currentSort = 'az';
@@ -1355,8 +1396,12 @@ document.addEventListener('DOMContentLoaded', function() {
             renderNovelGrid();
         });
         document.getElementById('forceReimportBtn')?.addEventListener('click', function() {
-            if (gapi.client && gapi.client.getToken && gapi.client.getToken()) listDriveFiles();
-            else showToast('Connect Drive first', 'error');
+            if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
+                // Manual sync
+                listDriveFiles(true);
+            } else {
+                showToast('Connect Drive first', 'error');
+            }
         });
     }
 

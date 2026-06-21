@@ -1,23 +1,56 @@
 // ================================================================
-// CONFIGURATION – Replace with your real Google OAuth Client ID
+// YÚN XIĀOSHUŌ – MAIN APPLICATION
+// ================================================================
+// Structure:
+//   I.   CONFIGURATION
+//   II.  DATA LAYER (universal)
+//   III. UTILITY FUNCTIONS (universal)
+//   IV.  VOLUME PARSER (universal)
+//   V.   CSV PARSER & COVER MAPPING (universal)
+//   VI.  GOOGLE API & DRIVE (universal)
+//   VII. SYNC FUNCTIONS (universal)
+//   VIII. SORT FUNCTIONS (universal)
+//   IX.  RENDER – INDEX PAGE (index only)
+//   X.   RENDER – DETAIL PAGE (detail only)
+//   XI.  RENDER – HISTORY PAGE (history only)
+//   XII. READER (universal)
+//   XIII. PAGE INIT (universal)
+//   XIV. GLOBAL EXPOSURE (universal)
+// ================================================================
+
+// ================================================================
+// I. CONFIGURATION
 // ================================================================
 const CLIENT_ID = '855351743150-catri9qskphur736modkajoo76h93kbb.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 
-// ================================================================
-// DATA LAYER – localStorage persistence
-// ================================================================
 const STORAGE_KEY = 'novelLibraryData';
+const DB_NAME = 'NovelPdfCache';
+const STORE_NAME = 'pdfs';
+const DEFAULT_COVER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Crect width='200' height='280' fill='%23232937'/%3E%3Ctext x='100' y='140' font-family='Arial' font-size='80' fill='%239aa3b8' text-anchor='middle' dy='.3em'%3E📖%3C/text%3E%3C/svg%3E";
+
+// ================================================================
+// II. DATA LAYER (universal)
+// ================================================================
 let appData = loadData();
-let driveFiles = [];
 let coverMapping = {};
 let coverFileMap = {};
 let csvLoadError = null;
 
-// Debounce: prevent multiple syncs within 60 seconds
-let lastSyncTime = 0;
-const SYNC_DEBOUNCE_MS = 60000; // 1 minute
+// ---- State variables ----
+let detailSortAscending = true;
+let currentDetailNovelId = null;
+let currentDetailSectionName = null;
+let searchQuery = '';
+let currentSort = 'az';
+
+// ---- Page state ----
+let gapiInited = false;
+let gisInited = false;
+let tokenClient = null;
+let db = null;
+let toastTimer = null;
 
 function loadData() {
     try {
@@ -27,7 +60,9 @@ function loadData() {
         if (!data.novels) data.novels = [];
         if (!data.history) data.history = [];
         return data;
-    } catch { return { novels: [], history: [] }; }
+    } catch {
+        return { novels: [], history: [] };
+    }
 }
 
 function saveData(data) {
@@ -40,9 +75,8 @@ function generateId() {
 }
 
 // ================================================================
-// UTILITY FUNCTIONS
+// III. UTILITY FUNCTIONS (universal)
 // ================================================================
-
 function escapeHtml(text) {
     if (!text) return '';
     const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
@@ -55,11 +89,6 @@ function extractFileId(input) {
     if (match) return match[1];
     return input.trim();
 }
-
-function getDefaultCover() {
-    return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Crect width='200' height='280' fill='%23232937'/%3E%3Ctext x='100' y='140' font-family='Arial' font-size='80' fill='%239aa3b8' text-anchor='middle' dy='.3em'%3E📖%3C/text%3E%3C/svg%3E";
-}
-const DEFAULT_COVER = getDefaultCover();
 
 function formatDate(dateStr) {
     const d = new Date(dateStr);
@@ -77,30 +106,89 @@ function truncateTitle(title, maxLen = 50) {
     return title.length > maxLen ? title.substring(0, maxLen) + '…' : title;
 }
 
+function normalizeTitle(title) {
+    if (!title) return '';
+    let cleaned = title.replace(/\([^)]*\)/g, '');
+    cleaned = cleaned.replace(/\[[^\]]*\]/g, '');
+    cleaned = cleaned.replace(/[^a-zA-Z0-9 ]/g, ' ');
+    cleaned = cleaned.replace(/^(a |an |the )/i, '');
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    return cleaned;
+}
+
+function normalizeForMatching(str) {
+    if (!str) return '';
+    return str
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, ' ')   // replace all punctuation with space
+        .replace(/\s+/g, ' ')          // collapse multiple spaces
+        .trim();
+}
+
+function cleanVolumeMainName(name) {
+    if (!name) return '';
+    let cleaned = name.replace(/\[[^\]]*\]\s*/g, '');   // remove all bracketed groups + trailing spaces
+    cleaned = cleaned.replace(/[-–—]\s*$/, '');         // trailing dash
+    cleaned = cleaned.replace(/^\s*[-–—]\s*/, '');      // leading dash
+    return cleaned.trim();
+}
+
 // ================================================================
-// SMART VOLUME NAME PARSER
+// IV. VOLUME PARSER (universal)
 // ================================================================
 function parseVolumeName(fullTitle) {
-    const match = fullTitle.match(/(Vol|Volume|V)\s*([\d.]+)/i);
+    const title = fullTitle.replace(/\.[^.]+$/, '');
+    const match = title.match(/(Vol|Volume|V)\s*([\d.]+)/i);
     if (!match) {
+        const cleaned = cleanVolumeMainName(title);
         return {
             number: 0,
-            mainName: fullTitle,
+            mainName: cleaned,
             special: null,
-            displayName: fullTitle
+            displayName: cleaned
         };
     }
     const num = parseFloat(match[2]);
     const index = match.index;
-    const before = fullTitle.substring(0, index).trim();
-    const after = fullTitle.substring(index + match[0].length).trim();
+    const before = title.substring(0, index).trim();
+    const after = title.substring(index + match[0].length).trim();
 
-    let mainName = before.replace(/[-–—]\s*$/, '').trim();
-    let special = after.replace(/^[-–—]\s*/, '').trim();
+    const specialKeywords = ['alter', 'special', 'bonus', 'extra', 'side', 'spin-off', 'after', 'before', 'prologue', 'epilogue', 'interlude', 'alternative', 'another'];
+    let mainName = '';
+    let special = null;
+
+    function detectSpecial(part) {
+        const lower = part.toLowerCase();
+        for (const kw of specialKeywords) {
+            if (lower.includes(kw)) {
+                let cleaned = part.replace(new RegExp(kw, 'i'), '').trim();
+                cleaned = cleaned.replace(/^[-–—]\s*/, '').replace(/[-–—]\s*$/, '');
+                return { isSpecial: true, cleaned: cleaned };
+            }
+        }
+        return { isSpecial: false, cleaned: part };
+    }
+
+    const beforeResult = detectSpecial(before);
+    const afterResult = detectSpecial(after);
+
+    if (beforeResult.isSpecial && !afterResult.isSpecial) {
+        special = beforeResult.cleaned || before;
+        mainName = afterResult.cleaned || after;
+    } else if (afterResult.isSpecial && !beforeResult.isSpecial) {
+        special = afterResult.cleaned || after;
+        mainName = beforeResult.cleaned || before;
+    } else {
+        mainName = beforeResult.cleaned || before;
+        special = afterResult.cleaned || after || null;
+    }
+
+    mainName = cleanVolumeMainName(mainName);
+    if (special) special = special.trim();
 
     let displayName = '';
     if (special) {
-        displayName = `Vol.${formatVolNumber(num)} – ${mainName} – ${special}`;
+        displayName = `${special} – Vol.${formatVolNumber(num)} – ${mainName}`;
     } else {
         displayName = `Vol.${formatVolNumber(num)} – ${mainName}`;
     }
@@ -108,14 +196,75 @@ function parseVolumeName(fullTitle) {
     return {
         number: num,
         mainName: mainName,
-        special: special || null,
+        special: special,
         displayName: displayName
     };
 }
 
 // ================================================================
-// COVER MAPPING – Load and parse CSV from assets/
+// V. CSV PARSER & COVER MAPPING (universal)
 // ================================================================
+function parseCSV(csvText) {
+    const rows = [];
+    let currentRow = [];
+    let currentField = '';
+    let insideQuotes = false;
+    let i = 0;
+    const len = csvText.length;
+
+    while (i < len) {
+        const char = csvText[i];
+        const nextChar = i + 1 < len ? csvText[i + 1] : '';
+
+        if (insideQuotes) {
+            if (char === '"' && nextChar === '"') {
+                currentField += '"';
+                i += 2;
+            } else if (char === '"') {
+                insideQuotes = false;
+                i++;
+            } else {
+                currentField += char;
+                i++;
+            }
+        } else {
+            if (char === '"') {
+                insideQuotes = true;
+                i++;
+            } else if (char === ';') {   // ← ONLY semicolon as separator
+                currentRow.push(currentField.trim());
+                currentField = '';
+                i++;
+            } else if (char === '\r' || char === '\n') {
+                if (currentField || currentRow.length > 0) {
+                    currentRow.push(currentField.trim());
+                    if (currentRow.some(f => f.length > 0)) {
+                        rows.push(currentRow);
+                    }
+                    currentRow = [];
+                    currentField = '';
+                }
+                if (char === '\r' && nextChar === '\n') {
+                    i += 2;
+                } else {
+                    i++;
+                }
+            } else {
+                currentField += char;
+                i++;
+            }
+        }
+    }
+
+    if (currentField || currentRow.length > 0) {
+        currentRow.push(currentField.trim());
+        if (currentRow.some(f => f.length > 0)) {
+            rows.push(currentRow);
+        }
+    }
+
+    return rows;
+}
 
 async function loadCoverMapping() {
     try {
@@ -126,68 +275,79 @@ async function loadCoverMapping() {
             csvLoadError = 'CSV file not found in assets/ folder.';
             return;
         }
-        const text = await response.text();
+        let text = await response.text();
+        if (text.charCodeAt(0) === 0xFEFF) {
+            text = text.substring(1);
+        }
         console.log('📄 CSV loaded, length:', text.length, 'bytes');
-        coverMapping = parseCoverMappingCSV(text);
+
+        const rows = parseCSV(text);
+        if (rows.length < 2) {
+            console.warn('⚠️ cover_mapping.csv is empty or missing data.');
+            return;
+        }
+
+        const headers = rows[0];
+        console.log('📄 Parsed headers:', headers);
+
+        const map = {};
+        const titleIdx = findHeaderIndex(headers, ['name ( eng )', 'name eng', 'english', 'title']);
+        const latinIdx = findHeaderIndex(headers, ['latin', 'romaji']);
+        const nonLatinIdx = findHeaderIndex(headers, ['non-latin', 'japanese', 'kanji']);
+        const authorIdx = findHeaderIndex(headers, ['author']);
+        const descIdx = findHeaderIndex(headers, ['description']);
+        const coverIdx = findHeaderIndex(headers, ['cover (image file)', 'cover', 'image', 'cover_url']);
+
+        if (titleIdx === -1) {
+            console.warn('❌ CSV must have a "Name ( ENG )" (or "english") column. Found:', headers);
+            return {};
+        }
+
+        for (let i = 1; i < rows.length; i++) {
+            const cols = rows[i];
+            const englishName = cols[titleIdx]?.trim() || '';
+            const author = cols[authorIdx]?.trim() || 'Unknown';
+            const description = cols[descIdx]?.trim() || '';
+            const latin = cols[latinIdx]?.trim() || '';
+            const nonLatin = cols[nonLatinIdx]?.trim() || '';
+            const image = cols[coverIdx]?.trim() || '';
+
+            if (englishName) {
+                const entry = { englishName, author, description, latin, nonLatin, image };
+
+                // ---- Store ALL variants ----
+                const variants = [
+                    englishName,                              // original case
+                    englishName.toLowerCase(),                // lowercase
+                    normalizeForMatching(englishName),        // normalized (punctuation removed)
+                    englishName.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase(), // no punctuation
+                    englishName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase(), // alphanumeric only
+                ];
+                // Remove duplicates
+                const uniqueVariants = [...new Set(variants)];
+                for (const key of uniqueVariants) {
+                    map[key] = entry;
+                }
+                // Also store Latin and Non-Latin
+                if (latin && latin !== 'N/A') {
+                    const latinKey = normalizeForMatching(latin);
+                    map[latinKey] = entry;
+                }
+                if (nonLatin && nonLatin !== 'N/A') {
+                    const nonLatinKey = normalizeForMatching(nonLatin);
+                    map[nonLatinKey] = entry;
+                }
+            }
+        }
+
+        coverMapping = map;
         console.log(`✅ Loaded ${Object.keys(coverMapping).length} cover mappings from CSV.`);
+        console.log('📄 Sample CSV keys:', Object.keys(coverMapping).slice(0, 20));
         csvLoadError = null;
     } catch (err) {
         console.warn('❌ Error loading cover mapping CSV:', err);
         csvLoadError = err.message;
     }
-}
-
-function parseCoverMappingCSV(csvText) {
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
-    if (lines.length < 2) {
-        console.warn('⚠️ cover_mapping.csv is empty or missing headers.');
-        return {};
-    }
-
-    console.log('📄 CSV headers (raw):', lines[0]);
-    console.log('📄 CSV first data row:', lines[1] || '(empty)');
-
-    const headers = parseCSVRow(lines[0]);
-    console.log('📄 Parsed headers:', headers);
-
-    const map = {};
-
-    const titleIdx = findHeaderIndex(headers, ['name ( eng )', 'name eng', 'english', 'title']);
-    const latinIdx = findHeaderIndex(headers, ['latin', 'romaji']);
-    const nonLatinIdx = findHeaderIndex(headers, ['non-latin', 'japanese', 'kanji']);
-    const authorIdx = findHeaderIndex(headers, ['author']);
-    const descIdx = findHeaderIndex(headers, ['description']);
-    const coverIdx = findHeaderIndex(headers, ['cover (image file)', 'cover', 'image', 'cover_url']);
-
-    console.log('📄 Column indices:', { titleIdx, latinIdx, nonLatinIdx, authorIdx, descIdx, coverIdx });
-
-    if (titleIdx === -1) {
-        console.warn('❌ CSV must have a "Name ( ENG )" (or "english") column. Found:', headers);
-        return {};
-    }
-
-    if (coverIdx === -1) {
-        console.warn('⚠️ CSV does not have a "Cover (image file)" column. Covers will use defaults.');
-    }
-
-    for (let i = 1; i < lines.length; i++) {
-        const cols = parseCSVRow(lines[i]);
-        const title = cols[titleIdx]?.trim() || '';
-        const author = cols[authorIdx]?.trim() || 'Unknown';
-        const description = cols[descIdx]?.trim() || '';
-        const latin = cols[latinIdx]?.trim() || '';
-        const nonLatin = cols[nonLatinIdx]?.trim() || '';
-        const image = cols[coverIdx]?.trim() || '';
-
-        if (title) {
-            map[title.toLowerCase()] = { author, description, latin, nonLatin, image };
-        }
-    }
-
-    const sampleKeys = Object.keys(map).slice(0, 5);
-    console.log('📄 Sample mappings:', sampleKeys.map(k => ({ key: k, value: map[k] })));
-
-    return map;
 }
 
 function findHeaderIndex(headers, possibleNames) {
@@ -198,61 +358,117 @@ function findHeaderIndex(headers, possibleNames) {
     return -1;
 }
 
-function parseCSVRow(row) {
-    const result = [];
-    let current = '';
-    let inQuotes = false;
-    let i = 0;
-    while (i < row.length) {
-        const char = row[i];
-        if (char === '"') {
-            if (inQuotes && row[i + 1] === '"') {
-                current += '"';
-                i += 2;
-            } else {
-                inQuotes = !inQuotes;
-                i++;
-            }
-        } else if (char === ',' && !inQuotes) {
-            result.push(current.trim());
-            current = '';
-            i++;
-        } else {
-            current += char;
-            i++;
-        }
-    }
-    result.push(current.trim());
-    return result;
-}
-
 function applyCoverMapping() {
     let updated = false;
     let matchedCount = 0;
-    let unmatchedNovels = [];
 
     appData.novels.forEach(novel => {
-        const title = novel.title.toLowerCase();
-        if (coverMapping[title]) {
-            matchedCount++;
-            const data = coverMapping[title];
-            if (data.author && novel.author !== data.author) { novel.author = data.author; updated = true; }
-            if (data.description && novel.description !== data.description) { novel.description = data.description; updated = true; }
-            if (data.latin) { novel.latin = data.latin; updated = true; }
-            if (data.nonLatin) { novel.nonLatin = data.nonLatin; updated = true; }
+        const driveKey = novel.title;
+        const normalizedDriveKey = normalizeForMatching(driveKey);
+        let data = null;
 
+        // ---- Generate all possible drive variants ----
+        const driveVariants = [
+            driveKey,
+            driveKey.toLowerCase(),
+            normalizedDriveKey,
+            driveKey.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase(),
+            driveKey.replace(/[^a-zA-Z0-9]/g, '').toLowerCase(),
+            normalizedDriveKey.replace(/^(the |a |an )/, ''),
+        ];
+
+        // ---- Try exact match on all variants ----
+        for (const variant of driveVariants) {
+            if (coverMapping[variant]) {
+                data = coverMapping[variant];
+                console.log(`✅ Exact match for "${novel.title}" using key: "${variant}"`);
+                break;
+            }
+        }
+
+        // ---- If still no data, try partial match ----
+        if (!data) {
+            for (const [csvKey, csvData] of Object.entries(coverMapping)) {
+                const normalizedCsvKey = normalizeForMatching(csvKey);
+                if (normalizedCsvKey.includes(normalizedDriveKey) ||
+                    normalizedDriveKey.includes(normalizedCsvKey)) {
+                    data = csvData;
+                    console.log(`✅ Partial match: "${novel.title}" → "${csvKey}"`);
+                    break;
+                }
+            }
+        }
+
+        // ---- If still no data, try matching by Latin/Non-Latin ----
+        if (!data && novel.latin) {
+            const normalizedLatin = normalizeForMatching(novel.latin);
+            for (const [csvKey, csvData] of Object.entries(coverMapping)) {
+                if (csvData.latin) {
+                    const normalizedCsvLatin = normalizeForMatching(csvData.latin);
+                    if (normalizedCsvLatin === normalizedLatin ||
+                        normalizedCsvLatin.includes(normalizedLatin) ||
+                        normalizedLatin.includes(normalizedCsvLatin)) {
+                        data = csvData;
+                        console.log(`✅ Latin match: "${novel.title}" → "${csvData.latin}"`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!data && novel.nonLatin) {
+            const normalizedNonLatin = normalizeForMatching(novel.nonLatin);
+            for (const [csvKey, csvData] of Object.entries(coverMapping)) {
+                if (csvData.nonLatin) {
+                    const normalizedCsvNonLatin = normalizeForMatching(csvData.nonLatin);
+                    if (normalizedCsvNonLatin === normalizedNonLatin ||
+                        normalizedCsvNonLatin.includes(normalizedNonLatin) ||
+                        normalizedNonLatin.includes(normalizedCsvNonLatin)) {
+                        data = csvData;
+                        console.log(`✅ Non-Latin match: "${novel.title}" → "${csvData.nonLatin}"`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (data) {
+            matchedCount++;
+            if (data.author && data.author !== 'N/A' && data.author !== 'Unknown') {
+                if (novel.author !== data.author) { novel.author = data.author; updated = true; }
+            }
+            if (data.description && data.description !== 'N/A') {
+                if (novel.description !== data.description) { novel.description = data.description; updated = true; }
+            }
+            if (data.latin && data.latin !== 'N/A') {
+                if (novel.latin !== data.latin) { novel.latin = data.latin; updated = true; }
+            }
+            if (data.nonLatin && data.nonLatin !== 'N/A') {
+                if (novel.nonLatin !== data.nonLatin) { novel.nonLatin = data.nonLatin; updated = true; }
+            }
+            if (data.englishName && data.englishName !== 'N/A') {
+                if (novel.englishName !== data.englishName) {
+                    novel.englishName = data.englishName;
+                    updated = true;
+                }
+            }
+
+            // ---- Cover image handling (unchanged) ----
             if (data.image) {
                 let imageVal = data.image.trim();
-                let fileId = null;
+                let coverUrl = null;
 
-                if (imageVal.startsWith('http://') || imageVal.startsWith('https://')) {
-                    if (novel.cover !== imageVal) {
-                        novel.cover = imageVal;
-                        updated = true;
+                if (imageVal.includes('drive.google.com')) {
+                    const fileId = extractFileId(imageVal);
+                    if (fileId) {
+                        coverUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w300`;
+                    } else {
+                        coverUrl = DEFAULT_COVER;
                     }
+                } else if (imageVal.startsWith('http://') || imageVal.startsWith('https://')) {
+                    coverUrl = imageVal;
                 } else {
-                    fileId = coverFileMap[imageVal] || coverFileMap[imageVal.toLowerCase()];
-
+                    let fileId = coverFileMap[imageVal] || coverFileMap[imageVal.toLowerCase()];
                     if (!fileId) {
                         const extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
                         for (const ext of extensions) {
@@ -261,27 +477,20 @@ function applyCoverMapping() {
                             if (fileId) break;
                         }
                     }
-
                     if (!fileId) {
                         const baseName = imageVal.replace(/\.[^.]+$/, '');
                         fileId = coverFileMap[baseName] || coverFileMap[baseName.toLowerCase()];
                     }
-
                     if (fileId) {
-                        const thumbnailUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w300`;
-                        if (novel.cover !== thumbnailUrl) {
-                            novel.cover = thumbnailUrl;
-                            novel.coverFileId = fileId;
-                            updated = true;
-                        }
+                        coverUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w300`;
                     } else {
-                        console.warn(`⚠️ Cover not found for "${novel.title}": "${imageVal}"`);
-                        if (novel.cover !== DEFAULT_COVER) {
-                            novel.cover = DEFAULT_COVER;
-                            updated = true;
-                        }
-                        unmatchedNovels.push({ title: novel.title, image: imageVal });
+                        coverUrl = DEFAULT_COVER;
                     }
+                }
+
+                if (coverUrl && novel.cover !== coverUrl) {
+                    novel.cover = coverUrl;
+                    updated = true;
                 }
             } else {
                 if (novel.cover !== DEFAULT_COVER) {
@@ -289,20 +498,37 @@ function applyCoverMapping() {
                     updated = true;
                 }
             }
+        } else {
+            console.warn(`❌ No match for: "${novel.title}" (normalized: "${normalizedDriveKey}")`);
         }
     });
 
     console.log(`📄 Matched ${matchedCount} of ${appData.novels.length} novels with CSV entries.`);
-    if (unmatchedNovels.length > 0) {
-        console.warn('⚠️ Cover not found for:', unmatchedNovels);
-        console.warn('💡 Available cover filenames:', Object.keys(coverFileMap).slice(0, 20));
-    }
+    deduplicateNovels();
+
     if (updated) {
         saveData(appData);
         renderAll();
-        console.log('✅ Applied cover/author/description/latin mappings from CSV.');
-    } else {
-        console.log('ℹ️ No changes needed from CSV mapping.');
+        console.log('✅ Applied cover/author/description/latin/englishName mappings from CSV.');
+    }
+}
+
+function deduplicateNovels() {
+    const seen = new Set();
+    const toRemove = [];
+    appData.novels.forEach(novel => {
+        const key = novel.title.toLowerCase().trim();
+        if (seen.has(key)) {
+            toRemove.push(novel.id);
+        } else {
+            seen.add(key);
+        }
+    });
+    if (toRemove.length > 0) {
+        appData.novels = appData.novels.filter(n => !toRemove.includes(n.id));
+        appData.history = appData.history.filter(h => appData.novels.some(n => n.id === h.novelId));
+        saveData(appData);
+        console.log(`🗑️ Removed ${toRemove.length} duplicate novels.`);
     }
 }
 
@@ -319,20 +545,904 @@ function updateStatuses() {
     if (changed) {
         saveData(appData);
         renderAll();
-        console.log('✅ Updated statuses based on history.');
     }
 }
 
 // ================================================================
-// PDF CACHE – IndexedDB
+// VI. GOOGLE API & DRIVE (universal)
 // ================================================================
-const DB_NAME = 'NovelPdfCache';
-const STORE_NAME = 'pdfs';
-let db = null;
+function saveToken(token) {
+    if (token) localStorage.setItem('drive_token', JSON.stringify(token));
+    else localStorage.removeItem('drive_token');
+}
+
+function restoreToken() {
+    const tokenData = localStorage.getItem('drive_token');
+    if (tokenData) {
+        try {
+            const token = JSON.parse(tokenData);
+            gapi.client.setToken(token);
+            return true;
+        } catch { return false; }
+    }
+    return false;
+}
+
+function loadGoogleApis() {
+    const check = setInterval(() => {
+        if (typeof gapi !== 'undefined' && typeof google !== 'undefined' && google.accounts) {
+            clearInterval(check);
+            gapi.load('client', () => {
+                gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] })
+                    .then(() => {
+                        gapiInited = true;
+                        console.log('GAPI ready');
+                        checkBothReady();
+                    })
+                    .catch(e => {
+                        console.error('GAPI init error:', e);
+                        showToast('GAPI init error', 'error');
+                    });
+            });
+            try {
+                tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    callback: ''
+                });
+                gisInited = true;
+                console.log('GIS ready');
+                checkBothReady();
+            } catch (e) {
+                console.error('GIS init error:', e);
+                showToast('GIS init error', 'error');
+            }
+        }
+    }, 300);
+    setTimeout(() => clearInterval(check), 15000);
+}
+
+function checkBothReady() {
+    if (gapiInited && gisInited) {
+        const btn = document.getElementById('driveConnectBtn');
+        if (btn) {
+            btn.disabled = false;
+            document.getElementById('driveStatus').textContent = 'Connect Drive';
+        }
+        if (restoreToken()) {
+            document.getElementById('driveStatus').textContent = 'Connected ✅';
+            const btn = document.getElementById('driveConnectBtn');
+            if (btn) btn.style.borderColor = '#4ade80';
+            listDriveFiles();
+        }
+    }
+}
+
+function refreshDriveConnection() {
+    if (gapiInited && gisInited) {
+        if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
+            document.getElementById('driveStatus').textContent = 'Connected ✅';
+            const btn = document.getElementById('driveConnectBtn');
+            if (btn) btn.style.borderColor = '#4ade80';
+            listDriveFiles();
+            showToast('Drive reconnected!', 'success');
+        } else {
+            showToast('Not connected to Drive. Click "Connect Drive".', 'info');
+        }
+    } else {
+        showToast('APIs loading... Please wait.', 'info');
+    }
+}
+
+function handleAuthClick() {
+    if (!gapiInited || !gisInited || !tokenClient) {
+        showToast('APIs not ready. Please wait.', 'error');
+        return;
+    }
+    tokenClient.callback = async (resp) => {
+        if (resp.error) {
+            showToast('Auth failed: ' + resp.error, 'error');
+            return;
+        }
+        if (resp.access_token) saveToken(resp);
+        document.getElementById('driveStatus').textContent = 'Connected ✅';
+        const btn = document.getElementById('driveConnectBtn');
+        if (btn) btn.style.borderColor = '#4ade80';
+        showToast('Connected to Google Drive!', 'success');
+        await listDriveFiles();
+    };
+    if (gapi.client.getToken() === null) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+        tokenClient.requestAccessToken({ prompt: '' });
+    }
+}
+
+function handleSignoutClick() {
+    const token = gapi.client.getToken();
+    if (token) {
+        google.accounts.oauth2.revoke(token.access_token, () => {
+            gapi.client.setToken(null);
+            saveToken(null);
+            document.getElementById('driveStatus').textContent = 'Connect Drive';
+            const btn = document.getElementById('driveConnectBtn');
+            if (btn) btn.style.borderColor = '';
+            showToast('Disconnected from Drive', 'info');
+            renderAll();
+        });
+    }
+}
+
+async function findFolderId(folderPath) {
+    const parts = folderPath.split('/').filter(p => p.length > 0);
+    let parent = 'root';
+    for (const part of parts) {
+        const q = `name='${part}' and '${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+        try {
+            const res = await gapi.client.drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
+            const files = res.result.files;
+            if (files && files.length > 0) {
+                parent = files[0].id;
+            } else return null;
+        } catch { return null; }
+    }
+    return parent;
+}
+
+async function listSubfolders(parentId) {
+    const q = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const res = await gapi.client.drive.files.list({ q, fields: 'files(id, name)', pageSize: 100 });
+    return res.result.files || [];
+}
+
+async function listFilesInFolder(folderId) {
+    const q = `'${folderId}' in parents and trashed=false`;
+    const res = await gapi.client.drive.files.list({ q, fields: 'files(id, name, mimeType, modifiedTime)', pageSize: 100 });
+    return res.result.files || [];
+}
+
+async function buildFolderTree(folderId, folderName) {
+    const files = await listFilesInFolder(folderId);
+    const subfolders = await listSubfolders(folderId);
+    const subfoldersTree = [];
+    for (const sub of subfolders) {
+        const child = await buildFolderTree(sub.id, sub.name);
+        subfoldersTree.push(child);
+    }
+    return { name: folderName, id: folderId, files: files, subfolders: subfoldersTree };
+}
+
+function flattenSections(tree, parentPath = '') {
+    // Recursively build sections for each folder that contains files
+    // Returns { rootVolumes: [...], sections: [{ name, volumes }] }
+    function processNode(node) {
+        const result = { rootVolumes: [], sections: [] };
+
+        // Get files directly in this node (root)
+        const validFiles = node.files.filter(f => {
+            const isPdf = f.mimeType === 'application/pdf' || f.name.endsWith('.pdf');
+            const isText = f.mimeType === 'text/plain' || f.name.endsWith('.txt');
+            return isPdf || isText;
+        });
+
+        validFiles.forEach(f => {
+            const parsed = parseVolumeName(f.name);
+            result.rootVolumes.push({
+                title: parsed.mainName,
+                displayName: parsed.displayName,
+                number: parsed.number,
+                special: parsed.special,
+                fileId: f.id,
+                mimeType: f.mimeType,
+                modifiedTime: f.modifiedTime || null,
+            });
+        });
+
+        // Process subfolders
+        for (const child of node.subfolders) {
+            const childResult = processNode(child);
+            // If child has root volumes, create a section for it
+            if (childResult.rootVolumes.length > 0) {
+                result.sections.push({
+                    name: child.name,
+                    volumes: childResult.rootVolumes
+                });
+            }
+            // Also include any sections from deeper levels (if child has sub-subfolders with volumes)
+            if (childResult.sections.length > 0) {
+                result.sections.push(...childResult.sections);
+            }
+        }
+
+        return result;
+    }
+
+    const result = processNode(tree);
+    // Return as { rootVolumes, sections }
+    return { rootVolumes: result.rootVolumes, sections: result.sections };
+}
+
+async function listDriveFiles() {
+    const pathDisplay = document.getElementById('drivePathDisplay');
+    if (pathDisplay) pathDisplay.textContent = '📁 Searching...';
+
+    try {
+        // ---- Try multiple case variations for J-Novel folder ----
+        const pathsToTry = [
+            'File/PDF/J-Novel',
+            'file/pdf/j-novel',
+            'File/PDF/j-novel',
+            'file/PDF/J-Novel',
+            'File/pdf/J-Novel'
+        ];
+        let rootId = null;
+        let foundPath = '';
+        for (const path of pathsToTry) {
+            const id = await findFolderId(path);
+            if (id) {
+                rootId = id;
+                foundPath = path;
+                console.log(`✅ Found folder at: ${path}`);
+                break;
+            }
+        }
+
+        if (!rootId) {
+            if (pathDisplay) pathDisplay.textContent = '📁 /file/pdf/j-novel/ (not found)';
+            showToast('Folder "j-novel" not found. Please check the path.', 'error');
+            return;
+        }
+        if (pathDisplay) pathDisplay.textContent = `📁 ${foundPath}`;
+
+        // ---- Cover folder ----
+        coverFileMap = {};
+        const coverPaths = [
+            'File/PDF/Novel Cover',
+            'file/pdf/novel cover',
+            'File/PDF/Novel_Cover',
+            'file/pdf/novel_cover',
+            'File/PDF/NovelCover',
+            'file/pdf/novelcover'
+        ];
+        let coverFolderId = null;
+        for (const path of coverPaths) {
+            const id = await findFolderId(path);
+            if (id) {
+                coverFolderId = id;
+                console.log(`📸 Found cover folder at: ${path}`);
+                break;
+            }
+        }
+
+        if (coverFolderId) {
+            const coverFiles = await listFilesInFolder(coverFolderId);
+            coverFiles.forEach(file => {
+                coverFileMap[file.name] = file.id;
+                coverFileMap[file.name.toLowerCase()] = file.id;
+            });
+            console.log(`📸 Found ${coverFiles.length} cover images.`);
+        } else {
+            console.log('ℹ️ Novel Cover folder not found – covers will use CSV URLs.');
+        }
+
+        // ---- Get all novel folders (subfolders of j-novel) ----
+        const novelFolders = await listSubfolders(rootId);
+        console.log(`📂 Found ${novelFolders.length} novel folders`);
+
+        const novelData = [];
+        for (const folder of novelFolders) {
+            const tree = await buildFolderTree(folder.id, folder.name);
+            const { rootVolumes, sections } = flattenSections(tree);
+
+            // Build final sections
+            const finalSections = [];
+            // "All Volumes" = root files only
+            finalSections.push({ name: 'All Volumes', volumes: rootVolumes });
+
+            // Add all other sections (subfolders)
+            for (const s of sections) {
+                if (!finalSections.find(fs => fs.name === s.name)) {
+                    finalSections.push(s);
+                } else {
+                    const existing = finalSections.find(fs => fs.name === s.name);
+                    if (existing) {
+                        existing.volumes.push(...s.volumes);
+                    }
+                }
+            }
+
+            // Total volumes = root volumes + all subfolder volumes
+            const totalVols = rootVolumes.length + sections.reduce((sum, s) => sum + s.volumes.length, 0);
+
+            novelData.push({
+                title: folder.name,
+                id: folder.id,
+                sections: finalSections,
+                volumes: rootVolumes,   // for backward compatibility
+                totalVolumes: totalVols
+            });
+        }
+
+        syncNovelsWithSections(novelData);
+        applyCoverMapping();
+        updateStatuses();
+        cleanupOrphanNovels();
+
+    } catch (err) {
+        console.error('Drive list error:', err);
+        if (pathDisplay) pathDisplay.textContent = '📁 /file/pdf/j-novel/ (error)';
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+function cleanupOrphanNovels() {
+    const toRemove = [];
+    appData.novels.forEach(novel => {
+        if (novel.fromDrive && (!novel.sections || novel.sections.length === 0) && novel.volumes.length === 0) {
+            toRemove.push(novel.id);
+        }
+    });
+    if (toRemove.length > 0) {
+        appData.novels = appData.novels.filter(n => !toRemove.includes(n.id));
+        appData.history = appData.history.filter(h => !toRemove.includes(h.novelId));
+        saveData(appData);
+        console.log(`🗑️ Removed ${toRemove.length} orphaned novels.`);
+    }
+}
+
+// ================================================================
+// VII. SYNC FUNCTIONS (universal)
+// ================================================================
+function syncNovelsWithSections(novelData) {
+    let updated = false;
+    for (const data of novelData) {
+        const existing = appData.novels.find(n => n.title === data.title);
+
+        if (existing) {
+            let changed = false;
+            if (data.sections && data.sections.length > 0) {
+                const existingSections = existing.sections || [];
+                data.sections.forEach(newSection => {
+                    const existingSection = existingSections.find(s => s.name === newSection.name);
+                    if (existingSection) {
+                        const newFileIds = new Set(newSection.volumes.map(v => v.fileId));
+                        const existingVols = existingSection.volumes || [];
+
+                        const toRemove = existingVols.filter(v => !newFileIds.has(v.fileId));
+                        if (toRemove.length > 0) {
+                            toRemove.forEach(v => {
+                                const idx = existingVols.indexOf(v);
+                                if (idx > -1) existingVols.splice(idx, 1);
+                            });
+                            changed = true;
+                        }
+
+                        newSection.volumes.forEach(newVol => {
+                            const existingVol = existingVols.find(v => v.fileId === newVol.fileId);
+                            if (existingVol) {
+                                if (existingVol.number !== newVol.number ||
+                                    existingVol.title !== newVol.title ||
+                                    existingVol.displayName !== newVol.displayName ||
+                                    existingVol.special !== newVol.special) {
+                                    existingVol.number = newVol.number;
+                                    existingVol.title = newVol.title;
+                                    existingVol.displayName = newVol.displayName;
+                                    existingVol.special = newVol.special;
+                                    existingVol.modifiedTime = newVol.modifiedTime;
+                                    changed = true;
+                                }
+                            } else {
+                                existingVols.push(newVol);
+                                changed = true;
+                            }
+                        });
+                        existingSection.volumes = existingVols;
+                    } else {
+                        existingSections.push(newSection);
+                        changed = true;
+                    }
+                });
+
+                const newSectionNames = new Set(data.sections.map(s => s.name));
+                const toRemoveSections = existingSections.filter(s => !newSectionNames.has(s.name) && s.name !== 'All Volumes');
+                if (toRemoveSections.length > 0) {
+                    toRemoveSections.forEach(s => {
+                        const idx = existingSections.indexOf(s);
+                        if (idx > -1) existingSections.splice(idx, 1);
+                    });
+                    changed = true;
+                }
+                existing.sections = existingSections;
+            }
+
+            if (existing.totalVolumes !== data.totalVolumes) {
+                existing.totalVolumes = data.totalVolumes;
+                changed = true;
+            }
+
+            if (changed) {
+                updated = true;
+                console.log(`✅ Synced "${data.title}"`);
+            }
+        } else {
+            appData.novels.push({
+                id: generateId(),
+                title: data.title,
+                author: 'Unknown',
+                description: `Auto-imported from Drive (${data.totalVolumes || 0} volumes)`,
+                cover: DEFAULT_COVER,
+                coverFileId: null,
+                status: 'not-read',
+                volumes: data.volumes || [],
+                sections: data.sections || [],
+                totalVolumes: data.totalVolumes || 0,
+                addedAt: new Date().toISOString(),
+                fromDrive: true,
+            });
+            updated = true;
+            console.log(`✅ Added new novel: "${data.title}"`);
+        }
+    }
+
+    if (updated) {
+        saveData(appData);
+        renderAll();
+        showToast('Refreshed novels from Drive!', 'success');
+    } else {
+        showToast('No changes detected in Drive.', 'info');
+    }
+}
+
+// ================================================================
+// VIII. SORT FUNCTIONS (universal)
+// ================================================================
+function sortVolumes(volumes, ascending = true) {
+    return [...volumes].sort((a, b) => {
+        const aHasSpecial = a.special ? 1 : 0;
+        const bHasSpecial = b.special ? 1 : 0;
+        if (aHasSpecial !== bHasSpecial) {
+            return ascending ? aHasSpecial - bHasSpecial : bHasSpecial - aHasSpecial;
+        }
+        const numA = a.number || 0;
+        const numB = b.number || 0;
+        return ascending ? numA - numB : numB - numA;
+    });
+}
+
+function sortNovels(novels, sortType) {
+    const sorted = [...novels];
+    switch (sortType) {
+        case 'az':
+            return sorted.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+        case 'za':
+            return sorted.sort((a, b) => b.title.toLowerCase().localeCompare(a.title.toLowerCase()));
+        case 'newest':
+            return sorted.sort((a, b) => new Date(b.addedAt) - new Date(a.addedAt));
+        case 'oldest':
+            return sorted.sort((a, b) => new Date(a.addedAt) - new Date(b.addedAt));
+        default:
+            return sorted;
+    }
+}
+
+// ================================================================
+// IX. RENDER – INDEX PAGE
+// ================================================================
+function renderAll() {
+    renderStats();
+    renderCurrentlyReading();
+    renderNovelGrid();
+}
+
+function renderStats() {
+    const total = appData.novels.length;
+    let volumes = 0,
+        reading = 0;
+    appData.novels.forEach(n => {
+        volumes += n.totalVolumes || (n.volumes || []).length;
+        if (n.status === 'reading') reading++;
+    });
+    document.getElementById('statNovels').textContent = total;
+    document.getElementById('statVolumes').textContent = volumes;
+    document.getElementById('statReading').textContent = reading;
+}
+
+function renderCurrentlyReading() {
+    const section = document.getElementById('currentlyReadingSection');
+    const container = document.getElementById('currentlyReadingContainer');
+    if (!section || !container) return;
+
+    const reading = appData.novels.filter(n => n.status === 'reading' && getLastReadInfo(n.id) !== null);
+    const sorted = reading.sort((a, b) => {
+        const lastA = getLastReadInfo(a.id),
+            lastB = getLastReadInfo(b.id);
+        const dateA = lastA ? new Date(lastA.date) : new Date(0);
+        const dateB = lastB ? new Date(lastB.date) : new Date(0);
+        return dateB - dateA;
+    });
+    const latest7 = sorted.slice(0, 7);
+
+    if (latest7.length === 0) {
+        section.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    section.style.display = 'block';
+    const badge = document.getElementById('readingBadge');
+    if (badge) badge.textContent = `Latest ${latest7.length}`;
+
+    container.innerHTML = latest7.map(n => {
+        const volCount = n.totalVolumes || (n.volumes || []).length;
+        const lastInfo = getLastReadInfo(n.id);
+        const lastDate = lastInfo ? formatDate(lastInfo.date) : 'Not read yet';
+        const coverSrc = n.cover || DEFAULT_COVER;
+        const mainTitle = (n.nonLatin && n.nonLatin.trim() !== '') ? n.nonLatin : n.title;
+        return `
+            <div class="reading-card" onclick="window.location.href='detail.html?id=${n.id}'">
+                <img src="${coverSrc}" alt="${escapeHtml(n.title)}" loading="lazy" onerror="this.style.display='none'">
+                <h4>${escapeHtml(mainTitle)}</h4>
+                <div class="author">${escapeHtml(n.author)}</div>
+                <div class="volume-count">${volCount} volume${volCount!==1?'s':''}</div>
+                <div class="read-date"><i class="fas fa-clock"></i> ${lastInfo ? lastDate : 'Not read'}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderNovelGrid() {
+    const container = document.getElementById('novelGridContainer');
+    if (!container) return;
+
+    let novelsToRender = appData.novels;
+    if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        novelsToRender = appData.novels.filter(n => {
+            return (n.title && n.title.toLowerCase().includes(q)) ||
+                (n.author && n.author.toLowerCase().includes(q)) ||
+                (n.latin && n.latin.toLowerCase().includes(q)) ||
+                (n.nonLatin && n.nonLatin.toLowerCase().includes(q));
+        });
+    }
+
+    const seen = new Set();
+    novelsToRender = novelsToRender.filter(n => {
+        if (seen.has(n.id)) return false;
+        seen.add(n.id);
+        return true;
+    });
+
+    const sortedNovels = sortNovels(novelsToRender, currentSort);
+    if (sortedNovels.length === 0) {
+        container.innerHTML = '<div class="empty-state">No novels found. Connect Drive to automatically import your library.</div>';
+        return;
+    }
+
+    container.innerHTML = sortedNovels.map(n => {
+        // ---- Use "All Volumes" section for home page ----
+        const allVolumesSection = (n.sections || []).find(s => s.name === 'All Volumes');
+        const mainVolumes = allVolumesSection ? allVolumesSection.volumes : (n.volumes || []);
+        const totalVolCount = n.totalVolumes || (n.volumes || []).length;
+
+        const maxVolumesToShow = 3;
+        const sortedVolumes = sortVolumes(mainVolumes, true);
+        const showVolumes = sortedVolumes.slice(0, maxVolumesToShow);
+        const remaining = totalVolCount - maxVolumesToShow;
+
+        const volList = showVolumes.map((v, idx) => {
+            const hasFile = v.fileId && v.fileId.length > 0;
+            const displayName = v.displayName || `Vol.${formatVolNumber(v.number)} – ${v.title || ''}`;
+            const clickAttr = hasFile ? `onclick="event.stopPropagation(); window.openReader('${n.id}', ${idx})"` : '';
+            const clickableClass = hasFile ? 'clickable' : '';
+            const textColor = hasFile ? 'var(--text-primary)' : 'var(--text-secondary)';
+            return `<div class="volume-row ${clickableClass}" ${clickAttr}>
+                        <span class="volume-name" style="color:${textColor};">${escapeHtml(displayName)}</span>
+                    </div>`;
+        }).join('');
+
+        let moreText = '';
+        if (remaining > 0) {
+            moreText = `<div class="more-link">+ ${remaining} more volume${remaining > 1 ? 's' : ''}</div>`;
+        }
+
+        const coverSrc = n.cover || DEFAULT_COVER;
+        const statusColor = n.status === 'reading' ? '#4ade80' : '#9aa3b8';
+        const statusLabel = n.status === 'reading' ? 'Reading' : 'Not read';
+
+        const englishDisplay = n.englishName || n.title;
+        const mainTitle = (n.nonLatin && n.nonLatin.trim() !== '') ? n.nonLatin : englishDisplay;
+        const latinLine = (n.latin && n.latin.trim() !== '') ? n.latin : '';
+        const englishLine = (n.nonLatin && n.nonLatin.trim() !== '') ? englishDisplay : '';
+
+        return `
+            <div class="novel-card" onclick="window.location.href='detail.html?id=${n.id}'">
+                <div class="novel-card-inner">
+                    <div class="novel-cover">
+                        <img src="${coverSrc}" alt="${escapeHtml(n.title)}" loading="lazy" onerror="this.src='${DEFAULT_COVER}'">
+                    </div>
+                    <div class="novel-info">
+                        <div class="novel-title-block">
+                            <div class="novel-title">${escapeHtml(mainTitle)}</div>
+                            ${latinLine ? `<div class="novel-latin">${escapeHtml(latinLine)}</div>` : ''}
+                            ${englishLine ? `<div class="novel-english">${escapeHtml(englishLine)}</div>` : ''}
+                        </div>
+                        <div class="novel-author">${escapeHtml(n.author)}</div>
+                        <div class="novel-meta">
+                            <span class="novel-status" style="color:${statusColor}">${statusLabel}</span>
+                            <span class="novel-vol-count">${totalVolCount} volume${totalVolCount !== 1 ? 's' : ''}</span>
+                            ${n.fromDrive ? '<span class="drive-badge"><i class="fas fa-cloud"></i> Drive</span>' : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="novel-volumes">
+                    <div>
+                        ${volList}
+                        ${moreText}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ================================================================
+// X. RENDER – DETAIL PAGE
+// ================================================================
+function loadDetailPage() {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('id');
+    const section = params.get('section');
+    if (!id) {
+        showToast('No novel specified', 'error');
+        window.location.href = 'index.html';
+        return;
+    }
+    currentDetailNovelId = id;
+    currentDetailSectionName = section || null;
+    detailSortAscending = true;
+    renderNovelDetail(id, section);
+    updateSortButton();
+}
+
+function renderNovelDetail(novelId, sectionName) {
+    const novel = appData.novels.find(n => n.id === novelId);
+    if (!novel) {
+        showToast('Novel not found', 'error');
+        window.location.href = 'index.html';
+        return;
+    }
+
+    document.getElementById('detailCover').src = novel.cover || DEFAULT_COVER;
+
+    // ---- TITLE LINES ----
+    const mainTitleEl = document.getElementById('detailTitle');
+    const latinTitleEl = document.getElementById('detailLatinTitle');
+    const englishTitleEl = document.getElementById('detailEnglishTitle');
+
+    const englishDisplay = novel.englishName || novel.title;
+
+    if (novel.nonLatin && novel.nonLatin.trim() !== '') {
+        mainTitleEl.textContent = novel.nonLatin;
+        latinTitleEl.textContent = novel.latin || '';
+        englishTitleEl.textContent = englishDisplay;
+        englishTitleEl.style.display = 'block';
+    } else {
+        mainTitleEl.textContent = englishDisplay;
+        latinTitleEl.textContent = novel.latin || 'N/A';
+        englishTitleEl.textContent = '';
+        englishTitleEl.style.display = 'none';
+    }
+
+    document.getElementById('detailAuthor').textContent = 'by ' + (novel.author || 'Unknown');
+
+    // ---- DESCRIPTION & READ MORE ----
+    const descEl = document.getElementById('detailDescription');
+    const readMoreBtn = document.getElementById('readMoreBtn');
+    const wrapper = document.getElementById('descriptionWrapper');
+
+    const fullDescription = novel.description || 'No description available.';
+    const maxChars = 200;
+    const truncated = fullDescription.length > maxChars
+        ? fullDescription.substring(0, maxChars) + '…'
+        : fullDescription;
+
+    descEl.dataset.fullText = fullDescription;
+    descEl.dataset.truncated = truncated;
+
+    let isExpanded = false;
+
+    function updateDescription() {
+        if (isExpanded) {
+            descEl.textContent = fullDescription;
+            readMoreBtn.textContent = 'Show less';
+        } else {
+            descEl.textContent = truncated;
+            readMoreBtn.textContent = fullDescription.length > maxChars ? 'Read more' : '';
+        }
+        readMoreBtn.style.display = fullDescription.length > maxChars ? 'inline-block' : 'none';
+    }
+
+    isExpanded = false;
+    updateDescription();
+
+    readMoreBtn.onclick = function(e) {
+        e.stopPropagation();
+        isExpanded = !isExpanded;
+        updateDescription();
+    };
+
+    // ---- STATUS ----
+    const statusText = novel.status === 'reading' ? 'Reading' : 'Not read';
+    const totalVols = novel.totalVolumes || (novel.volumes || []).length;
+    document.getElementById('detailStatus').textContent = `${totalVols} volume${totalVols !== 1 ? 's' : ''} – ${statusText}`;
+    document.getElementById('detailStatus').className = 'status-badge ' + (novel.status || 'not-read');
+    document.getElementById('detailVolCount').textContent = '';
+
+    // ---- VOLUMES ----
+    let volumesToShow = [];
+    let sectionDisplayName = 'All Volumes';
+
+    if (sectionName) {
+        const section = (novel.sections || []).find(s => s.name === sectionName);
+        if (section) {
+            volumesToShow = section.volumes || [];
+            sectionDisplayName = sectionName;
+        } else {
+            const found = (novel.sections || []).find(s => s.name.toLowerCase().includes(sectionName.toLowerCase()));
+            if (found) {
+                volumesToShow = found.volumes || [];
+                sectionDisplayName = found.name;
+            } else {
+                volumesToShow = novel.volumes || [];
+            }
+        }
+    } else {
+        const allSection = (novel.sections || []).find(s => s.name === 'All Volumes');
+        if (allSection) {
+            volumesToShow = allSection.volumes || [];
+            sectionDisplayName = 'All Volumes';
+        } else {
+            volumesToShow = novel.volumes || [];
+        }
+    }
+
+    // Breadcrumb
+    const breadcrumb = document.getElementById('detailBreadcrumb');
+    if (breadcrumb) {
+        if (sectionName) {
+            breadcrumb.innerHTML = `
+                <a href="detail.html?id=${novel.id}">${escapeHtml(novel.title)}</a>
+                <span> / </span>
+                <span>${escapeHtml(sectionDisplayName)}</span>
+            `;
+        } else {
+            breadcrumb.innerHTML = `<span>${escapeHtml(novel.title)}</span>`;
+        }
+    }
+
+    renderNovelSections(novel, sectionName);
+    renderDetailVolumes(novel, volumesToShow, sectionDisplayName, sectionName);
+    updateSortButton();
+}
+
+function renderNovelSections(novel, activeSection) {
+    const container = document.getElementById('detailSectionsContainer');
+    if (!container) return;
+
+    const sections = novel.sections || [];
+    if (sections.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    const sorted = sections.sort((a, b) => {
+        if (a.name === 'All Volumes') return -1;
+        if (b.name === 'All Volumes') return 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    container.innerHTML = sorted.map(s => {
+        const isActive = (activeSection === null && s.name === 'All Volumes') || (s.name === activeSection);
+        const url = s.name === 'All Volumes' ?
+            `detail.html?id=${novel.id}` :
+            `detail.html?id=${novel.id}&section=${encodeURIComponent(s.name)}`;
+        return `
+            <a href="${url}">
+                <div class="section-tab ${isActive ? 'active' : ''}">${escapeHtml(s.name)}</div>
+            </a>
+        `;
+    }).join('');
+}
+
+function renderDetailVolumes(novel, volumes, sectionName, sectionParam) {
+    const container = document.getElementById('detailVolumesContainer');
+    if (!container) return;
+
+    if (!volumes || volumes.length === 0) {
+        container.innerHTML = `<div class="empty-state">No volumes in "${escapeHtml(sectionName)}".</div>`;
+        return;
+    }
+
+    const sortedVols = sortVolumes(volumes, detailSortAscending);
+
+    container.innerHTML = sortedVols.map((v, idx) => {
+        const hasFile = v.fileId && v.fileId.length > 0;
+        const fileId = extractFileId(v.fileId);
+        const isValidFile = hasFile && fileId;
+        const displayName = v.displayName || v.title || `Volume ${idx + 1}`;
+        const clickHandler = isValidFile ? `onclick="window.openReader('${novel.id}', ${idx})"` : '';
+        const cursorStyle = isValidFile ? 'cursor:pointer;' : 'cursor:default;';
+
+        return `
+            <div class="history-item" style="${cursorStyle}" ${clickHandler}>
+                <div style="flex:1; min-width:0;">
+                    <strong style="display:block; overflow-wrap:break-word; word-break:break-word; line-height:1.4;">${escapeHtml(displayName)}</strong>
+                    ${!isValidFile ? '<span style="font-size:0.7rem; color:#f87171;">⚠️ No valid file</span>' : ''}
+                </div>
+                <!-- Read icon removed -->
+            </div>
+        `;
+    }).join('');
+}
+
+function updateSortButton() {
+    const btn = document.getElementById('sortVolumesToggle');
+    if (!btn) return;
+    btn.innerHTML = detailSortAscending ?
+        '<i class="fas fa-arrow-up"></i> Ascending' :
+        '<i class="fas fa-arrow-down"></i> Descending';
+}
+
+// ================================================================
+// XI. RENDER – HISTORY PAGE
+// ================================================================
+function renderFullHistory() {
+    const container = document.getElementById('fullHistoryContainer');
+    if (!container) return;
+
+    const history = appData.history;
+    const countEl = document.getElementById('historyCount');
+    if (countEl) countEl.textContent = history.length + ' entries';
+
+    if (history.length === 0) {
+        container.innerHTML = '<div class="empty-state">No reading history yet.</div>';
+        return;
+    }
+
+    const items = history.slice().reverse();
+    container.innerHTML = items.map(h => {
+        const novel = appData.novels.find(n => n.id === h.novelId);
+        const title = novel ? (novel.nonLatin && novel.nonLatin.trim() !== '' ? novel.nonLatin : novel.title) : 'Unknown novel';
+        const volNum = h.volumeIndex !== undefined ? h.volumeIndex + 1 : '?';
+        const date = h.date ? new Date(h.date).toLocaleString() : '';
+        const hasFile = novel && novel.volumes[h.volumeIndex] && novel.volumes[h.volumeIndex].fileId;
+        const clickable = hasFile ? `onclick="window.openReader('${h.novelId}', ${h.volumeIndex})"` : '';
+        const cursor = hasFile ? 'cursor:pointer;' : 'cursor:default;';
+        return `
+            <div class="history-item" style="${cursor}" ${clickable}>
+                <div class="left">
+                    <span class="novel-title">${escapeHtml(title)}</span>
+                    <span class="volume-label">Vol. ${volNum}</span>
+                </div>
+                <span class="date">${date}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+// ================================================================
+// XII. READER (universal)
+// ================================================================
+function getLastReadInfo(novelId) {
+    const entries = appData.history.filter(h => h.novelId === novelId);
+    if (entries.length === 0) return null;
+    return entries.reduce((a, b) => new Date(a.date) > new Date(b.date) ? a : b);
+}
 
 function openCache() {
     return new Promise((resolve, reject) => {
-        if (db) { resolve(db); return; }
+        if (db) { resolve(db);
+            return; }
         const request = indexedDB.open(DB_NAME, 1);
         request.onupgradeneeded = (e) => {
             const db = e.target.result;
@@ -401,765 +1511,8 @@ async function clearPdfCache() {
     }
 }
 
-// ================================================================
-// TOAST
-// ================================================================
-let toastTimer;
-
-function showToast(msg, type = 'info') {
-    const el = document.getElementById('toast');
-    if (!el) return;
-    el.textContent = msg;
-    el.className = 'toast ' + type;
-    void el.offsetWidth;
-    el.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
-}
-
-// ================================================================
-// TOKEN PERSISTENCE
-// ================================================================
-
-function saveToken(token) {
-    if (token) localStorage.setItem('drive_token', JSON.stringify(token));
-    else localStorage.removeItem('drive_token');
-}
-
-function restoreToken() {
-    const tokenData = localStorage.getItem('drive_token');
-    if (tokenData) {
-        try {
-            const token = JSON.parse(tokenData);
-            gapi.client.setToken(token);
-            return true;
-        } catch { return false; }
-    }
-    return false;
-}
-
-// ================================================================
-// GOOGLE API LOADING
-// ================================================================
-let gapiInited = false, gisInited = false, tokenClient = null;
-let syncedOnce = false; // prevent repeated auto-sync
-
-function loadGoogleApis() {
-    const check = setInterval(() => {
-        if (typeof gapi !== 'undefined' && typeof google !== 'undefined' && google.accounts) {
-            clearInterval(check);
-            gapi.load('client', () => {
-                gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] })
-                    .then(() => { gapiInited = true; console.log('GAPI ready'); checkBothReady(); })
-                    .catch(e => { console.error('GAPI init error:', e); showToast('GAPI init error', 'error'); });
-            });
-            try {
-                tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' });
-                gisInited = true;
-                console.log('GIS ready');
-                checkBothReady();
-            } catch (e) { console.error('GIS init error:', e); showToast('GIS init error', 'error'); }
-        }
-    }, 300);
-    setTimeout(() => clearInterval(check), 15000);
-}
-
-function checkBothReady() {
-    if (gapiInited && gisInited) {
-        const btn = document.getElementById('driveConnectBtn');
-        if (btn) { btn.disabled = false; document.getElementById('driveStatus').textContent = 'Connect Drive'; }
-        // Only auto-sync once per session and only if not synced yet
-        if (restoreToken() && !syncedOnce) {
-            syncedOnce = true;
-            document.getElementById('driveStatus').textContent = 'Connected ✅';
-            const btn = document.getElementById('driveConnectBtn');
-            if (btn) btn.style.borderColor = '#4ade80';
-            // Auto-sync – suppress success toast
-            listDriveFiles(false);
-        }
-    }
-}
-
-function refreshDriveConnection() {
-    if (gapiInited && gisInited) {
-        if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
-            document.getElementById('driveStatus').textContent = 'Connected ✅';
-            const btn = document.getElementById('driveConnectBtn');
-            if (btn) btn.style.borderColor = '#4ade80';
-            // Manual sync – show toast
-            listDriveFiles(true);
-            showToast('Drive reconnected!', 'success');
-        } else {
-            showToast('Not connected to Drive. Click "Connect Drive".', 'info');
-        }
-    } else {
-        showToast('APIs loading... Please wait.', 'info');
-    }
-}
-
-function handleAuthClick() {
-    if (!gapiInited || !gisInited || !tokenClient) {
-        showToast('APIs not ready. Please wait.', 'error');
-        return;
-    }
-    tokenClient.callback = async (resp) => {
-        if (resp.error) { showToast('Auth failed: ' + resp.error, 'error'); return; }
-        if (resp.access_token) saveToken(resp);
-        document.getElementById('driveStatus').textContent = 'Connected ✅';
-        const btn = document.getElementById('driveConnectBtn');
-        if (btn) btn.style.borderColor = '#4ade80';
-        showToast('Connected to Google Drive!', 'success');
-        // Manual sync after login
-        await listDriveFiles(true);
-    };
-    if (gapi.client.getToken() === null) tokenClient.requestAccessToken({ prompt: 'consent' });
-    else tokenClient.requestAccessToken({ prompt: '' });
-}
-
-function handleSignoutClick() {
-    const token = gapi.client.getToken();
-    if (token) {
-        google.accounts.oauth2.revoke(token.access_token, () => {
-            gapi.client.setToken(null);
-            saveToken(null);
-            document.getElementById('driveStatus').textContent = 'Connect Drive';
-            const btn = document.getElementById('driveConnectBtn');
-            if (btn) btn.style.borderColor = '';
-            showToast('Disconnected from Drive', 'info');
-            driveFiles = [];
-            renderAll();
-        });
-    }
-}
-
-// ================================================================
-// DRIVE API – with folder path fallback
-// ================================================================
-
-async function findFolderId(folderPath) {
-    const parts = folderPath.split('/').filter(p => p.length > 0);
-    let parent = 'root';
-    for (const part of parts) {
-        const q = `name='${part}' and '${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-        try {
-            const res = await gapi.client.drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
-            const files = res.result.files;
-            if (files && files.length > 0) { parent = files[0].id; }
-            else return null;
-        } catch { return null; }
-    }
-    return parent;
-}
-
-async function listSubfolders(parentId) {
-    const q = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    const res = await gapi.client.drive.files.list({ q, fields: 'files(id, name)', pageSize: 100 });
-    return res.result.files || [];
-}
-
-async function listFilesInFolder(folderId) {
-    const q = `'${folderId}' in parents and trashed=false`;
-    const res = await gapi.client.drive.files.list({ q, fields: 'files(id, name, mimeType, modifiedTime)', pageSize: 100 });
-    return res.result.files || [];
-}
-
-async function listDriveFiles(manual = false) {
-    // Debounce: prevent frequent runs
-    const now = Date.now();
-    if (now - lastSyncTime < SYNC_DEBOUNCE_MS) {
-        console.log('⏳ Sync debounced – skipping (last sync was ' + (now - lastSyncTime) + 'ms ago)');
-        return;
-    }
-    lastSyncTime = now;
-
-    const pathDisplay = document.getElementById('drivePathDisplay');
-    if (pathDisplay) pathDisplay.textContent = '📁 Searching...';
-
-    try {
-        // 1. Find j-novel folder – try multiple casing
-        const jNovelPaths = [
-            'file/pdf/j-novel',
-            'file/PDF/j-novel',
-            'file/pdf/J-Novel',
-            'file/PDF/J-Novel',
-            'file/pdf/J-novel',
-            'file/PDF/J-novel',
-            'j-novel',
-            'J-Novel'
-        ];
-
-        let rootId = null;
-        let foundPath = null;
-        for (const path of jNovelPaths) {
-            const id = await findFolderId(path);
-            if (id) {
-                rootId = id;
-                foundPath = path;
-                break;
-            }
-        }
-
-        if (!rootId) {
-            if (pathDisplay) pathDisplay.textContent = '📁 j-novel folder not found.';
-            // Only show toast if manual
-            if (manual) showToast('Folder "j-novel" not found. Check path.', 'error');
-            return;
-        }
-        if (pathDisplay) pathDisplay.textContent = `📁 ${foundPath}/`;
-
-        // 2. Find Novel Cover folder – try multiple casing
-        const coverPaths = [
-            'file/PDF/Novel Cover',
-            'file/pdf/Novel Cover',
-            'file/PDF/novel cover',
-            'file/pdf/novel cover',
-            'Novel Cover',
-            'novel cover'
-        ];
-
-        coverFileMap = {};
-        let coverFolderFound = false;
-
-        for (const coverPath of coverPaths) {
-            const coverFolderId = await findFolderId(coverPath);
-            if (coverFolderId) {
-                const coverFiles = await listFilesInFolder(coverFolderId);
-                coverFiles.forEach(file => {
-                    coverFileMap[file.name] = file.id;
-                    coverFileMap[file.name.toLowerCase()] = file.id;
-                });
-                console.log(`📸 Found ${coverFiles.length} cover images in folder: "${coverPath}"`);
-                console.log('📸 Sample cover filenames:', coverFiles.slice(0, 10).map(f => f.name));
-                coverFolderFound = true;
-                break;
-            }
-        }
-
-        if (!coverFolderFound) {
-            console.warn('ℹ️ Novel Cover folder not found – covers will use default.');
-        }
-
-        // 3. Scan j-novel folder for subfolders (novels)
-        const folders = await listSubfolders(rootId);
-        if (folders.length > 0) {
-            console.log(`📂 Found ${folders.length} novel folders`);
-            const novelData = [];
-            for (const folder of folders) {
-                const files = await listFilesInFolder(folder.id);
-                const validFiles = files.filter(f => {
-                    if (f.mimeType === 'application/vnd.google-apps.folder') return false;
-                    const isPdf = f.mimeType === 'application/pdf' || f.name.endsWith('.pdf');
-                    const isText = f.mimeType === 'text/plain' || f.name.endsWith('.txt');
-                    return isPdf || isText;
-                });
-                if (validFiles.length === 0) continue;
-                novelData.push({
-                    title: folder.name,
-                    volumes: validFiles.map(f => ({
-                        number: 0,
-                        title: f.name.replace(/\.[^.]+$/, ''),
-                        fileId: f.id,
-                        mimeType: f.mimeType,
-                        modifiedTime: f.modifiedTime || null,
-                    }))
-                });
-            }
-            syncNovelsFromFolders(novelData, manual);
-        } else {
-            const files = await listFilesInFolder(rootId);
-            const validFiles = files.filter(f => {
-                if (f.mimeType === 'application/vnd.google-apps.folder') return false;
-                const isPdf = f.mimeType === 'application/pdf' || f.name.endsWith('.pdf');
-                const isText = f.mimeType === 'text/plain' || f.name.endsWith('.txt');
-                return isPdf || isText;
-            });
-            if (validFiles.length > 0) syncNovelsFromFlat(validFiles, manual);
-            else if (manual) showToast('No PDF/TXT files found.', 'info');
-        }
-
-        applyCoverMapping();
-        updateStatuses();
-        cleanupOrphanNovels();
-
-        if (csvLoadError) {
-            console.warn('⚠️ CSV loading issue:', csvLoadError);
-        } else if (Object.keys(coverMapping).length === 0) {
-            console.warn('⚠️ CSV loaded but no mappings found. Check column headers and data.');
-        }
-
-    } catch (err) {
-        console.error('Drive list error:', err);
-        if (pathDisplay) pathDisplay.textContent = '📁 Error scanning Drive.';
-        if (manual) showToast('Error: ' + err.message, 'error');
-    }
-}
-
-function cleanupOrphanNovels() {
-    let changed = false;
-    const toRemove = [];
-    appData.novels.forEach(novel => {
-        if (novel.fromDrive && novel.volumes.length === 0) {
-            toRemove.push(novel.id);
-            changed = true;
-        }
-    });
-    if (toRemove.length > 0) {
-        appData.novels = appData.novels.filter(n => !toRemove.includes(n.id));
-        appData.history = appData.history.filter(h => !toRemove.includes(h.novelId));
-        saveData(appData);
-        console.log(`🗑️ Removed ${toRemove.length} orphaned novels (no volumes).`);
-    }
-}
-
-// ================================================================
-// SYNC FUNCTIONS – with manual flag for toasts
-// ================================================================
-
-function syncNovelsFromFolders(novelData, manual = false) {
-    let updated = false;
-    for (const data of novelData) {
-        const existing = appData.novels.find(n => n.title === data.title);
-        let latestModified = null;
-
-        const newVols = data.volumes.map((v) => {
-            const fullTitle = v.title || '';
-            const parsed = parseVolumeName(fullTitle);
-            const num = parsed.number;
-            const mainName = parsed.mainName;
-            const displayName = parsed.displayName;
-
-            if (v.modifiedTime) {
-                const modDate = new Date(v.modifiedTime);
-                if (!latestModified || modDate > latestModified) latestModified = modDate;
-            }
-            return {
-                number: num,
-                title: mainName,
-                displayName: displayName,
-                special: parsed.special,
-                fileId: v.fileId,
-                mimeType: v.mimeType,
-                modifiedTime: v.modifiedTime || null
-            };
-        });
-
-        if (existing) {
-            const existingVols = existing.volumes;
-            const newFileIds = new Set(newVols.map(v => v.fileId));
-            const matchedIds = new Set();
-            let changed = false;
-
-            newVols.forEach(newVol => {
-                const existingVol = existingVols.find(v => v.fileId === newVol.fileId);
-                if (existingVol) {
-                    matchedIds.add(newVol.fileId);
-                    if (existingVol.number !== newVol.number || existingVol.title !== newVol.title || existingVol.displayName !== newVol.displayName) {
-                        existingVol.number = newVol.number;
-                        existingVol.title = newVol.title;
-                        existingVol.displayName = newVol.displayName;
-                        existingVol.special = newVol.special;
-                        existingVol.modifiedTime = newVol.modifiedTime;
-                        changed = true;
-                    }
-                }
-            });
-
-            newVols.forEach(newVol => {
-                if (!matchedIds.has(newVol.fileId)) {
-                    existingVols.push(newVol);
-                    changed = true;
-                    appData.history.push({
-                        novelId: existing.id,
-                        volumeIndex: existingVols.length - 1,
-                        date: new Date().toISOString()
-                    });
-                }
-            });
-
-            const removedVols = existingVols.filter(v => !newFileIds.has(v.fileId));
-            if (removedVols.length > 0) {
-                appData.history = appData.history.filter(h => {
-                    const vol = existingVols.find(v => v.fileId === h.fileId);
-                    return !removedVols.includes(vol);
-                });
-                removedVols.forEach(removed => {
-                    const idx = existingVols.indexOf(removed);
-                    if (idx > -1) existingVols.splice(idx, 1);
-                });
-                changed = true;
-                console.log(`🗑️ Removed ${removedVols.length} volume(s) from "${data.title}"`);
-            }
-
-            if (changed) {
-                existingVols.sort((a, b) => {
-                    if (a.special && !b.special) return 1;
-                    if (!a.special && b.special) return -1;
-                    return a.number - b.number;
-                });
-                if (latestModified) existing.driveModifiedDate = latestModified.toISOString();
-                updated = true;
-                console.log(`✅ Synced "${data.title}"`);
-            }
-        } else {
-            newVols.sort((a, b) => {
-                if (a.special && !b.special) return 1;
-                if (!a.special && b.special) return -1;
-                return a.number - b.number;
-            });
-            appData.novels.push({
-                id: generateId(),
-                title: data.title,
-                author: 'Unknown',
-                description: `Auto-imported from Drive (${newVols.length} volumes)`,
-                cover: DEFAULT_COVER,
-                coverFileId: null,
-                status: 'not-read',
-                volumes: newVols,
-                addedAt: new Date().toISOString(),
-                fromDrive: true,
-                driveModifiedDate: latestModified ? latestModified.toISOString() : null,
-            });
-            updated = true;
-            console.log(`✅ Added new novel: "${data.title}"`);
-        }
-    }
-    if (updated) {
-        saveData(appData);
-        renderAll();
-        // Only show toast if manual
-        if (manual) showToast('Refreshed novels from Drive!', 'success');
-    } else {
-        if (manual) showToast('No changes detected in Drive.', 'info');
-    }
-}
-
-function syncNovelsFromFlat(files, manual = false) {
-    const groups = {};
-    files.forEach(file => {
-        let name = file.name.replace(/\.[^.]+$/, '');
-        let novelName = name.replace(/[-–—]\s*(?:Vol|Volume|V)\s*\d+\.?\d*/i, '').trim() || name;
-        if (!groups[novelName]) groups[novelName] = [];
-        groups[novelName].push(file);
-    });
-    console.log('📊 Groups from flat files:', Object.keys(groups));
-    let updated = false;
-    for (const [title, fileList] of Object.entries(groups)) {
-        const existing = appData.novels.find(n => n.title === title);
-        let latestModified = null;
-
-        const newVols = fileList.map((f) => {
-            const fullTitle = f.name.replace(/\.[^.]+$/, '');
-            const parsed = parseVolumeName(fullTitle);
-            const num = parsed.number;
-            const mainName = parsed.mainName;
-            const displayName = parsed.displayName;
-
-            if (f.modifiedTime) {
-                const modDate = new Date(f.modifiedTime);
-                if (!latestModified || modDate > latestModified) latestModified = modDate;
-            }
-            return {
-                number: num,
-                title: mainName,
-                displayName: displayName,
-                special: parsed.special,
-                fileId: f.id,
-                mimeType: f.mimeType,
-                modifiedTime: f.modifiedTime || null
-            };
-        });
-
-        if (existing) {
-            const existingVols = existing.volumes;
-            const newFileIds = new Set(newVols.map(v => v.fileId));
-            const matchedIds = new Set();
-            let changed = false;
-
-            newVols.forEach(newVol => {
-                const existingVol = existingVols.find(v => v.fileId === newVol.fileId);
-                if (existingVol) {
-                    matchedIds.add(newVol.fileId);
-                    if (existingVol.number !== newVol.number || existingVol.title !== newVol.title || existingVol.displayName !== newVol.displayName) {
-                        existingVol.number = newVol.number;
-                        existingVol.title = newVol.title;
-                        existingVol.displayName = newVol.displayName;
-                        existingVol.special = newVol.special;
-                        existingVol.modifiedTime = newVol.modifiedTime;
-                        changed = true;
-                    }
-                }
-            });
-
-            newVols.forEach(newVol => {
-                if (!matchedIds.has(newVol.fileId)) {
-                    existingVols.push(newVol);
-                    changed = true;
-                    appData.history.push({
-                        novelId: existing.id,
-                        volumeIndex: existingVols.length - 1,
-                        date: new Date().toISOString()
-                    });
-                }
-            });
-
-            const removedVols = existingVols.filter(v => !newFileIds.has(v.fileId));
-            if (removedVols.length > 0) {
-                appData.history = appData.history.filter(h => {
-                    const vol = existingVols.find(v => v.fileId === h.fileId);
-                    return !removedVols.includes(vol);
-                });
-                removedVols.forEach(removed => {
-                    const idx = existingVols.indexOf(removed);
-                    if (idx > -1) existingVols.splice(idx, 1);
-                });
-                changed = true;
-                console.log(`🗑️ Removed ${removedVols.length} volume(s) from "${title}"`);
-            }
-
-            if (changed) {
-                existingVols.sort((a, b) => {
-                    if (a.special && !b.special) return 1;
-                    if (!a.special && b.special) return -1;
-                    return a.number - b.number;
-                });
-                if (latestModified) existing.driveModifiedDate = latestModified.toISOString();
-                updated = true;
-                console.log(`✅ Synced "${title}"`);
-            }
-        } else {
-            newVols.sort((a, b) => {
-                if (a.special && !b.special) return 1;
-                if (!a.special && b.special) return -1;
-                return a.number - b.number;
-            });
-            appData.novels.push({
-                id: generateId(),
-                title,
-                author: 'Unknown',
-                description: `Auto-imported from Drive (${newVols.length} volumes)`,
-                cover: DEFAULT_COVER,
-                coverFileId: null,
-                status: 'not-read',
-                volumes: newVols,
-                addedAt: new Date().toISOString(),
-                fromDrive: true,
-                driveModifiedDate: latestModified ? latestModified.toISOString() : null,
-            });
-            updated = true;
-            console.log(`✅ Added new novel: "${title}"`);
-        }
-    }
-    if (updated) {
-        saveData(appData);
-        renderAll();
-        if (manual) showToast('Refreshed novels from Drive!', 'success');
-    } else {
-        if (manual) showToast('No changes detected in Drive.', 'info');
-    }
-}
-
-// ================================================================
-// RENDER FUNCTIONS – unchanged
-// ================================================================
-
-let currentSort = 'az';
-
-function sortNovels(novels, sortType) {
-    const sorted = [...novels];
-    switch (sortType) {
-        case 'az': return sorted.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
-        case 'za': return sorted.sort((a, b) => b.title.toLowerCase().localeCompare(a.title.toLowerCase()));
-        case 'newest': return sorted.sort((a, b) => new Date(b.addedAt) - new Date(a.addedAt));
-        case 'oldest': return sorted.sort((a, b) => new Date(a.addedAt) - new Date(b.addedAt));
-        default: return sorted;
-    }
-}
-
-function renderNovelGrid() {
-    const container = document.getElementById('novelGridContainer');
-    if (!container) return;
-    renderStats();
-
-    const sortedNovels = sortNovels(appData.novels, currentSort);
-    if (sortedNovels.length === 0) {
-        container.innerHTML = '<div class="empty-state">No novels found. Connect Drive to automatically import your library.</div>';
-        return;
-    }
-
-    container.innerHTML = sortedNovels.map(n => {
-        const volCount = (n.volumes || []).length;
-        const maxVolumesToShow = 2;
-        const showVolumes = n.volumes.slice(0, maxVolumesToShow);
-        const remaining = volCount - maxVolumesToShow;
-
-        const volList = showVolumes.map((v, idx) => {
-            const hasFile = v.fileId && v.fileId.length > 0;
-            const displayName = v.displayName || `Vol.${formatVolNumber(v.number)} – ${v.title || ''}`;
-            const clickAttr = hasFile ? `onclick="event.stopPropagation(); window.openReader('${n.id}', ${idx})"` : '';
-            const cursor = hasFile ? 'cursor:pointer;' : 'cursor:default;';
-            return `
-                <div class="vol-row" style="${cursor}" ${clickAttr}>
-                    <span class="vol-name">${escapeHtml(displayName)}</span>
-                    ${hasFile ? `<button class="btn-read" onclick="event.stopPropagation(); window.openReader('${n.id}', ${idx})">Read</button>` : `<span class="no-file">No file</span>`}
-                </div>
-            `;
-        }).join('');
-
-        let moreLink = '';
-        if (remaining > 0) {
-            moreLink = `
-                <div class="more-link">
-                    <a href="detail.html?id=${n.id}">+ ${remaining} more volume${remaining>1?'s':''} →</a>
-                </div>
-            `;
-        }
-
-        const coverSrc = n.cover || DEFAULT_COVER;
-        const statusColor = n.status === 'reading' ? '#4ade80' : '#9aa3b8';
-        const statusLabel = n.status === 'reading' ? '● Reading' : '○ Not read';
-
-        return `
-            <div class="novel-grid-item" onclick="window.location.href='detail.html?id=${n.id}'">
-                <div class="card-top">
-                    <div class="cover-wrapper">
-                        <img src="${coverSrc}" alt="${escapeHtml(n.title)}" loading="lazy" onerror="this.src='${DEFAULT_COVER}'; console.warn('⚠️ Image failed to load for: ${escapeHtml(n.title)}')">
-                    </div>
-                    <div class="info">
-                        <div class="title-area">
-                            <h4>${escapeHtml(n.title)}</h4>
-                            <div class="author">${escapeHtml(n.author)}</div>
-                            <div class="vol-count">${volCount} volume${volCount!==1?'s':''}</div>
-                        </div>
-                        <div class="meta-row">
-                            <span class="status-badge" style="color:${statusColor};">${statusLabel}</span>
-                            ${n.fromDrive ? '<span class="drive-badge"><i class="fas fa-cloud"></i> Drive</span>' : ''}
-                        </div>
-                    </div>
-                </div>
-                <div class="volume-list">
-                    ${volList}
-                    ${moreLink}
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderCurrentlyReading() {
-    const section = document.getElementById('currentlyReadingSection');
-    const container = document.getElementById('currentlyReadingContainer');
-    if (!section || !container) return;
-
-    const reading = appData.novels.filter(n => n.status === 'reading' && getLastReadInfo(n.id) !== null);
-    const sorted = reading.sort((a, b) => {
-        const lastA = getLastReadInfo(a.id), lastB = getLastReadInfo(b.id);
-        const dateA = lastA ? new Date(lastA.date) : new Date(0);
-        const dateB = lastB ? new Date(lastB.date) : new Date(0);
-        return dateB - dateA;
-    });
-    const latest7 = sorted.slice(0, 7);
-
-    if (latest7.length === 0) {
-        section.style.display = 'none';
-        container.innerHTML = '';
-        return;
-    }
-
-    section.style.display = 'block';
-    const badge = document.getElementById('readingBadge');
-    if (badge) badge.textContent = `Latest ${latest7.length}`;
-
-    container.innerHTML = latest7.map(n => {
-        const volCount = (n.volumes || []).length;
-        const lastInfo = getLastReadInfo(n.id);
-        const lastDate = lastInfo ? formatDate(lastInfo.date) : 'Not read yet';
-        const coverSrc = n.cover || DEFAULT_COVER;
-        return `
-            <div class="reading-card" onclick="window.location.href='detail.html?id=${n.id}'">
-                <img src="${coverSrc}" alt="${escapeHtml(n.title)}" loading="lazy" onerror="this.style.display='none'">
-                <h4>${escapeHtml(n.title)}</h4>
-                <div class="author">${escapeHtml(n.author)}</div>
-                <div class="volume-count">${volCount} volume${volCount!==1?'s':''}</div>
-                <div class="read-date"><i class="fas fa-clock"></i> ${lastInfo ? lastDate : 'Not read'}</div>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderFullHistory() {
-    const container = document.getElementById('fullHistoryContainer');
-    if (!container) return;
-    const history = appData.history;
-    const countEl = document.getElementById('historyCount');
-    if (countEl) countEl.textContent = history.length + ' entries';
-    if (history.length === 0) {
-        container.innerHTML = '<div class="empty-state">No reading history yet.</div>';
-        return;
-    }
-    const items = history.slice().reverse();
-    container.innerHTML = items.map(h => {
-        const novel = appData.novels.find(n => n.id === h.novelId);
-        const title = novel ? novel.title : 'Unknown novel';
-        const volNum = h.volumeIndex !== undefined ? h.volumeIndex + 1 : '?';
-        const date = h.date ? new Date(h.date).toLocaleString() : '';
-        const hasFile = novel && novel.volumes[h.volumeIndex] && novel.volumes[h.volumeIndex].fileId;
-        const clickable = hasFile ? `onclick="window.openReader('${h.novelId}', ${h.volumeIndex})"` : '';
-        const cursor = hasFile ? 'cursor:pointer;' : 'cursor:default;';
-        return `
-            <div class="history-item" style="${cursor}" ${clickable}>
-                <div class="left">
-                    <span class="novel-title">${escapeHtml(title)}</span>
-                    <span class="volume-label">Vol. ${volNum}</span>
-                </div>
-                <span class="date">${date}</span>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderStats() {
-    const novels = appData.novels;
-    const total = novels.length;
-    let volumes = 0, reading = 0;
-    novels.forEach(n => {
-        volumes += (n.volumes || []).length;
-        if (n.status === 'reading') reading++;
-    });
-    const elNov = document.getElementById('statNovels');
-    const elVol = document.getElementById('statVolumes');
-    const elRead = document.getElementById('statReading');
-    if (elNov) elNov.textContent = total;
-    if (elVol) elVol.textContent = volumes;
-    if (elRead) elRead.textContent = reading;
-}
-
-function renderAll() {
-    renderStats();
-    renderCurrentlyReading();
-    renderNovelGrid();
-}
-
-// ================================================================
-// READING HISTORY HELPERS
-// ================================================================
-
-function getLastReadInfo(novelId) {
-    const entries = appData.history.filter(h => h.novelId === novelId);
-    if (entries.length === 0) return null;
-    const latest = entries.reduce((a, b) => new Date(a.date) > new Date(b.date) ? a : b);
-    return { volumeIndex: latest.volumeIndex, date: latest.date };
-}
-
-function getVolumeNumber(novel, volumeIndex) {
-    if (!novel || !novel.volumes || volumeIndex >= novel.volumes.length) return null;
-    return novel.volumes[volumeIndex].number || volumeIndex + 1;
-}
-
-// ================================================================
-// READER
-// ================================================================
-
-let currentNovelId = null, currentVolumeIndex = null;
+let currentNovelId = null,
+    currentVolumeIndex = null;
 
 window.openReader = function(novelId, volIndex) {
     const novel = appData.novels.find(n => n.id === novelId);
@@ -1176,15 +1529,18 @@ window.openReader = function(novelId, volIndex) {
 
     currentNovelId = novelId;
     currentVolumeIndex = volIndex;
-    const title = `${novel.title} – Vol.${formatVolNumber(vol.number)}`;
-    document.getElementById('readerTitle').textContent = vol.title ? title + ' – ' + vol.title : title;
+    document.getElementById('readerTitle').textContent = `${novel.title} – ${vol.title || 'Vol.' + (volIndex + 1)}`;
     document.getElementById('readerBody').innerHTML = '<div class="loading">Loading file...</div>';
     document.getElementById('readerModal').classList.add('active');
     fetchFileContent(fileId);
 };
 
-document.getElementById('readerClose')?.addEventListener('click', () => document.getElementById('readerModal').classList.remove('active'));
-document.getElementById('readerModal')?.addEventListener('click', e => { if (e.target === this) this.classList.remove('active'); });
+document.getElementById('readerClose')?.addEventListener('click', () => {
+    document.getElementById('readerModal').classList.remove('active');
+});
+document.getElementById('readerModal')?.addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('active');
+});
 
 async function fetchFileContent(fileId) {
     try {
@@ -1207,7 +1563,8 @@ async function fetchFileContent(fileId) {
             return;
         }
         const meta = await gapi.client.drive.files.get({ fileId, fields: 'mimeType, name' });
-        const mimeType = meta.result.mimeType, name = meta.result.name;
+        const mimeType = meta.result.mimeType,
+            name = meta.result.name;
         if (mimeType === 'application/vnd.google-apps.folder') {
             document.getElementById('readerBody').innerHTML = `<div class="loading" style="color:#f87171;">❌ This is a folder.</div>`;
             showToast('This volume points to a folder.', 'error');
@@ -1228,7 +1585,8 @@ async function fetchFileContent(fileId) {
                     showToast('Token expired, refreshing...', 'info');
                     await new Promise(resolve => {
                         tokenClient.callback = async resp => {
-                            if (resp.error) { showToast('Token refresh failed', 'error'); resolve(); return; }
+                            if (resp.error) { showToast('Token refresh failed', 'error');
+                                resolve(); return; }
                             const newToken = gapi.client.getToken();
                             const retry = await fetch(url, { headers: { 'Authorization': 'Bearer ' + newToken.access_token } });
                             if (retry.ok) {
@@ -1279,84 +1637,19 @@ async function renderPdf(arrayBuffer) {
 }
 
 // ================================================================
-// DETAIL PAGE
+// XIII. PAGE INIT (universal)
 // ================================================================
-
-let detailNovelId = null;
-
-function loadDetailPage() {
-    const params = new URLSearchParams(window.location.search);
-    const id = params.get('id');
-    if (!id) { showToast('No novel specified', 'error'); window.location.href = 'index.html'; return; }
-    detailNovelId = id;
-    renderNovelDetail(id);
+function showToast(msg, type = 'info') {
+    const el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'toast ' + type;
+    void el.offsetWidth;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
 }
 
-function renderNovelDetail(novelId) {
-    const novel = appData.novels.find(n => n.id === novelId);
-    if (!novel) { showToast('Novel not found', 'error'); window.location.href = 'index.html'; return; }
-
-    document.getElementById('detailTitle').textContent = novel.title;
-
-    const coverSrc = novel.cover || DEFAULT_COVER;
-    document.getElementById('detailCover').src = coverSrc;
-    document.getElementById('detailCover').onerror = function() {
-        this.src = DEFAULT_COVER;
-    };
-
-    let subtitle = '';
-    if (novel.nonLatin && novel.latin) {
-        subtitle = `${novel.nonLatin} – ${novel.latin}`;
-    } else if (novel.nonLatin) {
-        subtitle = novel.nonLatin;
-    } else if (novel.latin) {
-        subtitle = novel.latin;
-    } else {
-        subtitle = 'by ' + (novel.author || 'Unknown');
-    }
-    document.getElementById('detailAuthor').textContent = subtitle;
-
-    document.getElementById('detailDescription').textContent = novel.description || 'No description available.';
-
-    const statusText = novel.status === 'reading' ? 'Reading' : 'Not read';
-    const volCount = (novel.volumes || []).length;
-    const statusDisplay = `${volCount} volume${volCount !== 1 ? 's' : ''} – ${statusText}`;
-    document.getElementById('detailStatus').textContent = statusDisplay;
-    document.getElementById('detailStatus').className = 'status-badge ' + (novel.status || 'not-read');
-    document.getElementById('detailVolCount').textContent = '';
-
-    renderDetailVolumes(novel);
-}
-
-function renderDetailVolumes(novel) {
-    const container = document.getElementById('detailVolumesContainer');
-    const volumes = novel.volumes || [];
-    if (volumes.length === 0) {
-        container.innerHTML = '<div class="empty-state">No volumes yet.</div>';
-        return;
-    }
-    container.innerHTML = volumes.map((v, idx) => {
-        const hasFile = v.fileId && v.fileId.length > 0;
-        const fileId = extractFileId(v.fileId);
-        const isValidFile = hasFile && fileId;
-        const displayName = v.displayName || `Vol.${formatVolNumber(v.number)} – ${v.title || ''}`;
-        const clickHandler = isValidFile ? `onclick="window.openReader('${novel.id}', ${idx})"` : '';
-        const cursorStyle = isValidFile ? 'cursor:pointer;' : 'cursor:default;';
-        return `
-            <div class="history-item" style="${cursorStyle}" ${clickHandler}>
-                <div style="flex:1; min-width:0;">
-                    <strong style="display:block; overflow-wrap:break-word; word-break:break-word; line-height:1.4;">${escapeHtml(displayName)}</strong>
-                    ${!isValidFile ? '<span style="font-size:0.7rem; color:#f87171;">⚠️ No valid file</span>' : ''}
-                </div>
-                ${isValidFile ? `<span style="color:var(--accent); font-size:0.75rem;"><i class="fas fa-play"></i> Read</span>` : ''}
-            </div>
-        `;
-    }).join('');
-}
-
-// ================================================================
-// PAGE INIT
-// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     const page = window.location.pathname.split('/').pop() || 'index.html';
 
@@ -1367,14 +1660,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Sidebar toggle
     const menuToggle = document.getElementById('menuToggle');
     const sidebar = document.getElementById('sidebar');
     const backdrop = document.getElementById('sidebarBackdrop');
+
     function closeSidebar() {
         sidebar.classList.remove('open');
         if (backdrop) backdrop.classList.remove('active');
     }
     window.closeSidebar = closeSidebar;
+
     if (menuToggle) {
         menuToggle.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -1382,13 +1678,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (backdrop) backdrop.classList.toggle('active');
         });
     }
-    if (backdrop) backdrop.addEventListener('click', closeSidebar);
+    if (backdrop) {
+        backdrop.addEventListener('click', closeSidebar);
+    }
     document.querySelectorAll('.sidebar-nav .nav-link').forEach(link => {
         link.addEventListener('click', function() {
             if (window.innerWidth <= 820) closeSidebar();
         });
     });
 
+    // ---- INDEX PAGE ----
     if (page === 'index.html' || page === '') {
         renderAll();
         document.getElementById('sortSelect')?.addEventListener('change', function() {
@@ -1397,46 +1696,51 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         document.getElementById('forceReimportBtn')?.addEventListener('click', function() {
             if (gapi.client && gapi.client.getToken && gapi.client.getToken()) {
-                // Manual sync
-                listDriveFiles(true);
+                listDriveFiles();
             } else {
                 showToast('Connect Drive first', 'error');
             }
         });
+        document.getElementById('searchInput')?.addEventListener('input', function() {
+            searchQuery = this.value.trim();
+            renderNovelGrid();
+        });
     }
 
+    // ---- HISTORY PAGE ----
     if (page === 'history.html') {
         renderFullHistory();
     }
 
+    // ---- DETAIL PAGE ----
     if (page === 'detail.html') {
         loadDetailPage();
+        document.getElementById('sortVolumesToggle')?.addEventListener('click', function() {
+            detailSortAscending = !detailSortAscending;
+            updateSortButton();
+            if (currentDetailNovelId) {
+                renderNovelDetail(currentDetailNovelId, currentDetailSectionName);
+            }
+        });
     }
 
+    // ---- SHARED (all pages) ----
     document.getElementById('driveConnectBtn')?.addEventListener('click', function() {
         const status = document.getElementById('driveStatus');
-        if (status && status.textContent === 'Connected ✅') handleSignoutClick();
-        else handleAuthClick();
+        if (status && status.textContent === 'Connected ✅') {
+            handleSignoutClick();
+        } else {
+            handleAuthClick();
+        }
     });
     document.getElementById('driveRefreshBtn')?.addEventListener('click', refreshDriveConnection);
-
-    document.getElementById('searchInput')?.addEventListener('input', function() {
-        const q = this.value.trim().toLowerCase();
-        document.querySelectorAll('#novelGridContainer .novel-grid-item').forEach(item => {
-            const title = item.querySelector('h4')?.textContent?.toLowerCase() || '';
-            const author = item.querySelector('.author')?.textContent?.toLowerCase() || '';
-            item.style.display = (title.includes(q) || author.includes(q)) ? '' : 'none';
-        });
-        const visible = Array.from(document.querySelectorAll('#novelGridContainer .novel-grid-item')).filter(el => el.style.display !== 'none');
-        const countEl = document.getElementById('novelCount');
-        if (countEl) countEl.textContent = visible.length + ' novels';
-    });
 
     loadGoogleApis();
 });
 
 // ================================================================
-// GLOBAL EXPOSURE
+// XIV. GLOBAL EXPOSURE (universal)
 // ================================================================
 window.openReader = openReader;
 window.clearPdfCache = clearPdfCache;
+window.closeSidebar = closeSidebar;

@@ -25,7 +25,7 @@
             <div class="sidebar-footer">
                 <button class="btn-drive" id="driveConnectBtn" disabled>
                     <i class="fab fa-google-drive"></i>
-                    <span id="driveStatus">Loading...</span>
+                    <span id="driveStatus">Loading…</span>
                 </button>
                 <button class="btn-refresh" id="driveRefreshBtn" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-sync-alt"></i> Reconnect Drive
@@ -37,6 +37,8 @@
             </div>
         </aside>
 
+        <div id="sidebarBackdrop" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:99;" onclick="closeSidebar()"></div>
+
         <main class="main-content">
             <header class="main-header">
                 <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
@@ -46,44 +48,69 @@
             </header>
 
             <div style="margin-bottom:16px;">
-                <a href="index.html" class="btn-secondary" style="text-decoration:none; display:inline-flex; align-items:center; gap:8px; padding:8px 16px;">
+                <a href="index.html" class="btn-secondary" style="text-decoration:none; display:inline-flex; align-items:center; gap:8px; padding:8px 16px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-primary); transition:var(--transition);">
                     <i class="fas fa-arrow-left"></i> Back to Home
                 </a>
             </div>
 
-            <!-- Novel Info (view only) -->
-            <div id="novelDetailContainer" style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 24px;">
-                <div style="display:flex; gap:24px; flex-wrap:wrap;">
-                    <img id="detailCover" src="" alt="Cover" style="width:150px; height:210px; object-fit:contain; border-radius:8px; background:var(--bg-card);">
-                    <div style="flex:1;">
-                        <h2 id="detailTitle" style="font-size:1.8rem; font-weight:700;">Loading...</h2>
-                        <p id="detailAuthor" style="color:var(--text-secondary); font-size:1rem;">by Unknown</p>
-                        <p id="detailDescription" style="color:var(--text-secondary); margin:8px 0;">No description</p>
-                        <span id="detailStatus" class="status-badge" style="display:inline-block; padding:4px 12px; border-radius:50px; font-size:0.8rem;">Not read</span>
-                        <span id="detailVolCount" style="margin-left:12px; color:var(--text-secondary); font-size:0.85rem;">0 volumes</span>
+            <div id="novelDetailContainer" class="detail-card-container" style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius); padding:24px; margin-bottom:24px;">
+                <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start;">
+                    <img id="detailCover" src="" alt="Cover" style="width:150px; height:210px; object-fit:contain; border-radius:8px; background:var(--bg-card); border:1px solid var(--border); flex-shrink:0;" />
+                    <div style="flex:1; min-width:200px;">
+                        <h1 id="detailTitle" style="font-size:2.0rem; font-weight:700; margin:0 0 2px 0; line-height:1.2;">Loading…</h1>
+                        <h2 id="detailLatinTitle" style="font-size:1.1rem; color:var(--text-secondary); margin:0 0 2px 0; font-weight:500;">&nbsp;</h2>
+                        <h3 id="detailEnglishTitle" style="font-size:0.95rem; color:var(--text-secondary); margin:0 0 6px 0; font-weight:400; opacity:0.8;">&nbsp;</h3>
+                        <p id="detailAuthor" style="color:var(--text-secondary); font-size:1rem; margin:0 0 4px 0;">by Unknown</p>
+
+                        <!-- ======== DESCRIPTION WITH READ MORE ======== -->
+                        <div class="description-wrapper" id="descriptionWrapper">
+                            <p id="detailDescription" class="description-text">No description</p>
+                            <button id="readMoreBtn" class="read-more-btn" style="display:none;">Read more</button>
+                        </div>
+
+                        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:8px;">
+                            <span id="detailStatus" class="status-badge" style="display:inline-block; padding:4px 14px; border-radius:50px; font-size:0.85rem; background:var(--bg-card); color:var(--text-secondary);">Not read</span>
+                            <span id="detailVolCount" style="color:var(--text-secondary); font-size:0.85rem;">0 volumes</span>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Volumes Section (read only) -->
-            <h3 style="margin-bottom:12px;"><i class="fas fa-layer-group"></i> All Volumes</h3>
+            <div id="detailBreadcrumb" style="font-size:0.85rem; margin-bottom:12px; color:var(--text-secondary);">
+                <span>Loading…</span>
+            </div>
 
+            <div id="detailSectionsContainer" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; padding:4px 0;">
+                <!-- Rendered by JavaScript -->
+            </div>
+
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+                <h3 style="margin:0; font-weight:600; font-size:1.1rem;">
+                    <i class="fas fa-layer-group" style="color:var(--accent);"></i> Volumes
+                </h3>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:0.8rem; color:var(--text-secondary);">Sort:</span>
+                    <button id="sortVolumesToggle" class="btn-secondary" style="padding:4px 14px; font-size:0.8rem; background:var(--bg-card); border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-primary); transition:var(--transition);">
+                        <i class="fas fa-arrow-up"></i> Ascending
+                    </button>
+                </div>
+            </div>
             <div id="detailVolumesContainer" style="display:flex; flex-direction:column; gap:8px;">
                 <div class="empty-state">No volumes yet.</div>
             </div>
+
         </main>
     </div>
 
     <div id="toast" class="toast"></div>
 
-    <!-- Reader Modal -->
     <div class="modal-overlay" id="readerModal">
         <div class="modal">
             <div class="modal-header">
                 <h2 id="readerTitle">Reading</h2>
                 <button class="modal-close" id="readerClose">&times;</button>
             </div>
-            <div class="modal-body" id="readerBody"><div class="loading">Loading content...</div></div>
+            <div class="modal-body" id="readerBody"><div class="loading">Loading content…</div></div>
         </div>
     </div>
 

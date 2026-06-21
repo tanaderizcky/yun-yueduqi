@@ -24,16 +24,13 @@
                 <a href="history.html" class="nav-link"><i class="fas fa-clock-rotate-left"></i> History</a>
             </nav>
             <div class="sidebar-footer">
-                <!-- Connect Drive button – auto‑imports on success -->
                 <button class="btn-drive" id="driveConnectBtn" disabled>
                     <i class="fab fa-google-drive"></i>
-                    <span id="driveStatus">Loading...</span>
+                    <span id="driveStatus">Loading…</span>
                 </button>
-                <!-- Force re‑check Drive connection -->
                 <button class="btn-refresh" id="driveRefreshBtn" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-sync-alt"></i> Reconnect Drive
                 </button>
-                <!-- Clear all cached data -->
                 <button class="btn-refresh" onclick="clearPdfCache()" style="width:100%; margin-top:4px; padding:6px 12px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; transition:var(--transition);">
                     <i class="fas fa-trash"></i> Clear Cache
                 </button>
@@ -48,10 +45,10 @@
                 <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
                 <div class="header-search">
                     <i class="fas fa-search"></i>
-                    <input type="text" id="searchInput" placeholder="Search novels...">
+                    <input type="text" id="searchInput" placeholder="Search novels…">
                 </div>
                 <div class="header-actions">
-                    <span>云<span>小说</span></span>
+                    <span class="greeting"><span style="color:var(--accent);">云</span>小说</span>
                 </div>
             </header>
 
@@ -87,16 +84,11 @@
                             <option value="oldest">Oldest</option>
                         </select>
                     </div>
-
-                    <!-- Only Refresh button remains -->
-                    <div class="control-grid" style="grid-template-columns: 1fr;">
-                        <button class="btn-refresh" id="forceReimportBtn" style="padding:6px 16px; font-size:0.75rem;">
-                            <i class="fas fa-sync-alt"></i> Refresh
-                        </button>
-                    </div>
+                    <button class="btn-refresh" id="forceReimportBtn" style="padding:6px 16px; font-size:0.75rem;">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
                 </div>
 
-                <!-- Novel grid – rendered by JavaScript -->
                 <div id="novelGridContainer" class="novel-grid">
                     <div class="empty-state">No novels found. Connect Drive to automatically import your library.</div>
                 </div>
@@ -112,7 +104,7 @@
                 <h2 id="readerTitle">Reading</h2>
                 <button class="modal-close" id="readerClose">&times;</button>
             </div>
-            <div class="modal-body" id="readerBody"><div class="loading">Loading content...</div></div>
+            <div class="modal-body" id="readerBody"><div class="loading">Loading content…</div></div>
         </div>
     </div>
 
